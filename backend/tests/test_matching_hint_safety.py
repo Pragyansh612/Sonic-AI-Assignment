@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from app.services.matching import match_credit
-from app.services.matching.config import AMBIGUOUS_CONFIDENCE_CAP, HIGH_CONFIDENCE
+from app.services.matching.config import AMBIGUOUS_CONFIDENCE_CAP, HIGH_CONFIDENCE, REVIEW_MIN
 from app.services.matching.normalize import normalize_narration
 from app.services.matching.types import InvoiceHintStrength
 from tests.helpers_matching import load_customers, load_open_invoices
@@ -89,24 +89,20 @@ def test_date_utr_near_payer_never_confident_wrong_sibling() -> None:
             invoices=invoices,
             customers=customers,
         )
-        if result.suggestion_type.value == "none":
-            continue
-        # May be ambiguous review-band suggestion, but never high-confidence
-        # single sibling without naming the other.
-        assert result.band != "high"
+        # No unique hint → none (or at worst not a high-confidence single sibling)
+        assert result.suggestion_type.value == "none" or result.band != "high"
         assert result.confidence < HIGH_CONFIDENCE
-        alt_nums = {
-            n
-            for a in result.alternatives
-            for n in (a.get("invoice_numbers") or [])
-        }
-        # If a sibling was suggested, the peer must appear in reason or alternatives
-        if result.invoice_numbers:
-            assert "ambiguous" in result.reason.lower() or len(alt_nums) >= 2
+        if result.suggestion_type.value == "none" and "ambiguous" in result.reason:
+            alt_nums = {
+                n
+                for a in result.alternatives
+                for n in (a.get("invoice_numbers") or [])
+            }
+            assert "INV-1024" in alt_nums and "INV-1025" in alt_nums
 
 
-def test_exact_tie_siblings_review_band_lists_both() -> None:
-    """Same customer, same amount, no invoice hint → capped review suggestion."""
+def test_exact_tie_siblings_none_with_alternatives() -> None:
+    """Same customer, same amount, no invoice hint → none under review threshold."""
     invoices = load_open_invoices()
     customers = load_customers()
     # Nordlys INV-1024 / INV-1025 both EUR 9200 outstanding
@@ -118,15 +114,56 @@ def test_exact_tie_siblings_review_band_lists_both() -> None:
         invoices=invoices,
         customers=customers,
     )
-    assert result.suggestion_type.value == "single"
-    assert result.invoice_numbers == ["INV-1024"]  # earliest due
-    assert result.confidence <= AMBIGUOUS_CONFIDENCE_CAP
-    assert result.confidence < HIGH_CONFIDENCE
-    assert result.band == "review"
-    assert "INV-1024" in result.reason and "INV-1025" in result.reason
+    assert result.suggestion_type.value == "none"
+    assert result.invoice_numbers == []
+    assert result.band == "none"
+    assert result.confidence == 0.0
+    assert AMBIGUOUS_CONFIDENCE_CAP < REVIEW_MIN
+    assert result.reason == "ambiguous between INV-1024/INV-1025"
     alt_nums = {
         n
         for a in result.alternatives
         for n in (a.get("invoice_numbers") or [])
     }
     assert "INV-1024" in alt_nums and "INV-1025" in alt_nums
+
+
+def test_explicit_invoice_hint_still_resolves() -> None:
+    """Explicit INV / RE hints must still pick the right sibling normally."""
+    invoices = load_open_invoices()
+    customers = load_customers()
+
+    inv1004 = match_credit(
+        narration="IMPS/KESTREL FOODS/INV 1004",
+        payment_minor=5_900_000,
+        currency="INR",
+        txn_date="2026-09-05",
+        invoices=invoices,
+        customers=customers,
+    )
+    assert inv1004.suggestion_type.value == "single"
+    assert inv1004.invoice_numbers == ["INV-1004"]
+    assert inv1004.confidence >= REVIEW_MIN
+
+    re1025 = match_credit(
+        narration="SEPA CR NORDLYS RETAIL GMBH RE 1025",
+        payment_minor=920_000,
+        currency="EUR",
+        txn_date="2026-10-16",
+        invoices=invoices,
+        customers=customers,
+    )
+    assert re1025.suggestion_type.value == "single"
+    assert re1025.invoice_numbers == ["INV-1025"]
+    assert re1025.confidence >= REVIEW_MIN
+
+    inv1024 = match_credit(
+        narration="SEPA CR NORDLYS RETAIL GMBH RE 1024",
+        payment_minor=920_000,
+        currency="EUR",
+        txn_date="2026-09-25",
+        invoices=invoices,
+        customers=customers,
+    )
+    assert inv1024.suggestion_type.value == "single"
+    assert inv1024.invoice_numbers == ["INV-1024"]

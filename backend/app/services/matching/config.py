@@ -43,9 +43,9 @@ AMOUNT_MISMATCH: float = 0.0
 DATE_DUE_PROXIMITY_DAYS: int = 14
 
 # Ambiguity: same-customer equal outstanding, no unique invoice hint.
-# Policy: still suggest earliest-due, but confidence MUST stay under HIGH_CONFIDENCE
-# (review band), and every sibling invoice is named in reason + alternatives.
-AMBIGUOUS_CONFIDENCE_CAP: float = 78.0  # must be < HIGH_CONFIDENCE
+# Policy: do NOT auto-suggest. Cap confidence below REVIEW_MIN so the result is
+# type "none", with every sibling named in reason + alternatives for the reviewer.
+AMBIGUOUS_CONFIDENCE_CAP: float = 59.0  # must be < REVIEW_MIN (60)
 AMBIGUOUS_RIVAL_CONFIDENCE_DELTA: float = 1.0
 
 # Multi-invoice subset-sum

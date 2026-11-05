@@ -214,4 +214,4 @@ Weights/thresholds: `backend/app/services/matching/config.py`.
 
 **Self-authored eval sets:** held-out adversarial CSV `backend/tests/fixtures/eval_holdout.csv` (+ labels) and the mutation stress suite were written without peeking at thresholds.
 
-**Stress test (mutations, seed 20261105):** 48 correct base rows → 271 mutations → **254 same / 17 none / 0 wrong**. Exact-tie siblings (same customer + amount, no hint) stay in the review band with both invoice numbers in the reason and alternatives.
+**Stress test (mutations, seed 20261105):** 46 correct base rows → 261 mutations → **243 same / 18 none / 0 wrong**. Exact-tie siblings (same customer + amount, no unique hint) return type **none** with reason `ambiguous between INV-X/INV-Y` and both invoices in alternatives (`AMBIGUOUS_CONFIDENCE_CAP=59` &lt; review 60). Explicit invoice hints still resolve normally.

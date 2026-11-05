@@ -6,7 +6,7 @@
   {"row": 5, "expect": "single", "invoices": ["INV-1002"], "note": "typo Brigtline + exact Brightline amount"},
   {"row": 6, "expect": "single", "invoices": ["INV-1013"], "note": "PKG abbreviation exact outstanding"},
   {"row": 7, "expect": "single", "invoices": ["INV-1017"], "note": "contact initials A MENON + Redwood"},
-  {"row": 8, "expect": "single", "invoices": ["INV-1024"], "note": "Nordlys equal amounts, no invoice hint — earliest due with ambiguity cap"},
+  {"row": 8, "expect": "none", "invoices": [], "note": "Nordlys equal amounts, no invoice hint — ambiguous siblings → none with both in alternatives"},
   {"row": 9, "expect": "none", "invoices": [], "note": "wrong currency EUR for USD invoice"},
   {"row": 10, "expect": "none", "invoices": [], "note": "payment before INV-1005 invoice_date"},
   {"row": 11, "expect": "single", "invoices": ["INV-1007"], "note": "INR TDS 10% subtotal"},
@@ -38,7 +38,7 @@
   {"row": 37, "expect": "single", "invoices": ["INV-1027"], "note": "James Whitmore contact GBP"},
   {"row": 38, "expect": "single", "invoices": ["INV-1023"], "note": "Harbour remaining outstanding 4000 not total"},
   {"row": 39, "expect": "none", "invoices": [], "note": "REF 1009 is paid invoice — must not match paid"},
-  {"row": 40, "expect": "single", "invoices": ["INV-1004"], "note": "Arjun Nair contact; equal amounts — ambiguous without hint may none; with contact+amount may pick earliest"},
+  {"row": 40, "expect": "none", "invoices": [], "note": "Arjun Nair contact; equal amounts, no invoice hint — ambiguous siblings → none"},
   {"row": 41, "expect": "single", "invoices": ["INV-1025"], "note": "RE 1025 after invoice date"},
   {"row": 42, "expect": "single", "invoices": ["INV-1011"], "note": "Rohan Bhatia contact"},
   {"row": 43, "expect": "none", "invoices": [], "note": "paid INV-1015 must never match"}

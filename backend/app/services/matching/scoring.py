@@ -177,13 +177,16 @@ def match_credit(
         for c in candidates[:3]
     ]
 
-    # Band / gate: below REVIEW_MIN → none
+    # Band / gate: below REVIEW_MIN → none (keep alternatives for the reviewer)
     if top.confidence < cfg.REVIEW_MIN:
+        none_reason = top.reason
+        if not none_reason.startswith("ambiguous between"):
+            none_reason = "No confident match"
         return MatchResult(
             suggestion_type=SuggestionType.NONE,
             invoice_numbers=[],
             confidence=0.0,
-            reason="No confident match",
+            reason=none_reason,
             evidence={
                 **top.evidence.to_dict(),
                 "best_guess": {
@@ -571,43 +574,25 @@ def _apply_uniqueness(
             seen_nums.add(hinted_group[0].invoice_numbers[0])
             continue
 
-        # Exact-tie siblings, no unique hint: suggest earliest due under the
-        # review band, and keep every sibling visible in reason + alternatives.
+        # Exact-tie siblings, no unique hint: force below REVIEW_MIN → type none,
+        # with every sibling visible in reason + alternatives.
         def due_key(c: MatchCandidate) -> str:
             inv = by_num[c.invoice_numbers[0].upper()]
             return inv.due_date
 
         group_sorted = sorted(group, key=due_key)
-        winner = group_sorted[0]
         rivals = [c.invoice_numbers[0] for c in group_sorted]
-        rival_list = ", ".join(rivals)
-        cap = min(cfg.AMBIGUOUS_CONFIDENCE_CAP, cfg.HIGH_CONFIDENCE - 0.1)
-        winner.confidence = min(winner.confidence, cap)
-        winner.evidence.uniqueness_note = (
-            f"ambiguous between {rival_list}; earliest due chosen"
-        )
-        winner.reason = (
-            f"{winner.reason} (ambiguous between {rival_list}; "
-            f"earliest due chosen — review band)"
-        )
-        resolved.append(winner)
-        seen_nums.add(winner.invoice_numbers[0])
-        # Keep rivals so alternatives lists every sibling invoice.
-        for i, rival in enumerate(group_sorted[1:], start=1):
-            rival.confidence = min(
-                rival.confidence,
+        ambiguous_reason = f"ambiguous between {'/'.join(rivals)}"
+        cap = min(cfg.AMBIGUOUS_CONFIDENCE_CAP, cfg.REVIEW_MIN - 0.1)
+        for i, cand in enumerate(group_sorted):
+            cand.confidence = min(
+                cand.confidence,
                 cap - cfg.AMBIGUOUS_RIVAL_CONFIDENCE_DELTA * i,
             )
-            rival.evidence.uniqueness_note = (
-                f"ambiguous sibling of {winner.invoice_numbers[0]} "
-                f"among {rival_list}"
-            )
-            rival.reason = (
-                f"{rival.reason} (ambiguous sibling among {rival_list}; "
-                f"not selected — earliest due was {winner.invoice_numbers[0]})"
-            )
-            resolved.append(rival)
-            seen_nums.add(rival.invoice_numbers[0])
+            cand.evidence.uniqueness_note = ambiguous_reason
+            cand.reason = ambiguous_reason
+            resolved.append(cand)
+            seen_nums.add(cand.invoice_numbers[0])
 
     # Keep any singles not grouped (shouldn't happen) + multi
     for c in singles:
