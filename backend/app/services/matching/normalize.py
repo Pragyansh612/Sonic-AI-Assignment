@@ -61,6 +61,7 @@ _NOISE_ALWAYS = frozenset(
         "SEPA",
         "CR",
         "DR",
+        "RC",  # common reorder/typo of CR; must not become a payer token
         "TRF",
         "TRANSFER",
         "PAYMENT",
@@ -71,6 +72,12 @@ _NOISE_ALWAYS = frozenset(
         "INT",
         "PD",
         "INTEREST",
+        "RECVD",
+        "CUST",
+        "ONLINE",
+        "BANK",
+        "TXN",
+        "SETTLEMENT",
     }
 )
 

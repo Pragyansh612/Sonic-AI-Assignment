@@ -101,7 +101,11 @@ def _company_aliases(name: str) -> set[str]:
     joined = " ".join(core)
     aliases.add(joined)
     aliases.add("".join(core))
-    aliases.add(_acronym(core))
+    # Two-letter acronyms (RC, BL, …) collide with bank noise / reordered CR/DR
+    # tokens and create false high-scoring payer matches.
+    acr = _acronym(core)
+    if len(acr) >= 3:
+        aliases.add(acr)
 
     # Singular / plural variants of last significant token
     for i, tok in enumerate(core):

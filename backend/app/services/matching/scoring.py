@@ -76,23 +76,39 @@ def match_credit(
     _bank_reference = bank_reference
     customer_map = {c.customer_id: c for c in customers}
 
-    # Best payer match across all customers
+    # Best / second-best payer match across all customers
     best_payer_sim = 0.0
     best_payer_customer = ""
     best_payer_alias = ""
     best_payer_source = ""
+    second_best_payer_sim = 0.0
     for cust in customers:
         aliases = build_aliases(cust)
         score, alias, source = best_alias_similarity(
             norm.payer_candidate, aliases, use_embeddings=use_embeddings
         )
         if score > best_payer_sim:
+            second_best_payer_sim = best_payer_sim
             best_payer_sim = score
             best_payer_customer = cust.customer_id
             best_payer_alias = alias
             best_payer_source = source
+        elif score > second_best_payer_sim:
+            second_best_payer_sim = score
 
     payer_clears_gate = _payer_gate(best_payer_sim, best_payer_source)
+    relaxed_contact_gate = False
+    if (
+        not payer_clears_gate
+        and best_payer_source == "contact"
+        and best_payer_sim >= cfg.CONTACT_PAYER_SIM_RELAXED
+        and (best_payer_sim - second_best_payer_sim)
+        >= cfg.CONTACT_PAYER_SECOND_BEST_MARGIN
+    ):
+        # Tentative: allow contact through; finalize only if amount is exact/TDS
+        # and confidence stays below the high band.
+        payer_clears_gate = True
+        relaxed_contact_gate = True
     has_hint = len(norm.invoice_hints) > 0
 
     # Soft amount/narrative hints for the reviewer — never raise confidence.
@@ -131,6 +147,7 @@ def match_credit(
         best_payer_source=best_payer_source,
         payer_clears_gate=payer_clears_gate,
         use_embeddings=use_embeddings,
+        relaxed_contact_gate=relaxed_contact_gate,
     )
 
     if not candidates:
@@ -199,6 +216,37 @@ def match_credit(
             band="none",
         )
 
+    # Relaxed contact-name gate: keep only exact/TDS amounts, never high band.
+    if relaxed_contact_gate:
+        amount_kind = str(top.evidence.amount_kind or "")
+        exactish = amount_kind in {
+            AmountMatchKind.EXACT_OUTSTANDING.value,
+            AmountMatchKind.EXACT_TOTAL.value,
+            AmountMatchKind.TDS_ADJUSTED.value,
+            AmountMatchKind.MULTI_EXACT.value,
+            AmountMatchKind.MULTI_TDS.value,
+        }
+        if not exactish or top.customer_id != best_payer_customer:
+            return MatchResult(
+                suggestion_type=SuggestionType.NONE,
+                invoice_numbers=[],
+                confidence=0.0,
+                reason="No confident match",
+                evidence={
+                    **top.evidence.to_dict(),
+                    "best_guess": {
+                        "invoice_numbers": list(top.invoice_numbers),
+                        "confidence": round(top.confidence, 1),
+                        "reason": top.reason,
+                    },
+                    "relaxed_contact_gate": True,
+                },
+                alternatives=alternatives,
+                band="none",
+            )
+        top.confidence = min(top.confidence, cfg.HIGH_CONFIDENCE - 0.1)
+        top.evidence.components["relaxed_contact_gate"] = 1.0
+
     band = "high" if top.confidence >= cfg.HIGH_CONFIDENCE else "review"
     return MatchResult(
         suggestion_type=top.suggestion_type,
@@ -211,9 +259,16 @@ def match_credit(
     )
 
 
-def _payer_gate(sim: float, source: str) -> bool:
+def _payer_gate(
+    sim: float, source: str, *, relaxed_contact: bool = False
+) -> bool:
     if source == "contact":
-        return sim >= cfg.CONTACT_PAYER_SIM_THRESHOLD
+        thr = (
+            cfg.CONTACT_PAYER_SIM_RELAXED
+            if relaxed_contact
+            else cfg.CONTACT_PAYER_SIM_THRESHOLD
+        )
+        return sim >= thr
     return sim >= cfg.PAYER_SIM_THRESHOLD
 
 
@@ -231,6 +286,7 @@ def _build_candidates(
     best_payer_source: str,
     payer_clears_gate: bool,
     use_embeddings: bool,
+    relaxed_contact_gate: bool = False,
 ) -> list[MatchCandidate]:
     by_num = invoices_by_number(open_invs)
     out: list[MatchCandidate] = []
@@ -264,6 +320,7 @@ def _build_candidates(
             global_payer_alias=best_payer_alias,
             global_payer_source=best_payer_source,
             use_embeddings=use_embeddings,
+            relaxed_contact_gate=relaxed_contact_gate,
         )
         if cand:
             out.append(cand)
@@ -292,6 +349,7 @@ def _build_candidates(
                 global_payer_alias=best_payer_alias,
                 global_payer_source=best_payer_source,
                 use_embeddings=use_embeddings,
+                relaxed_contact_gate=relaxed_contact_gate,
             )
             if not cand:
                 continue
@@ -401,6 +459,7 @@ def _score_singleton(
     global_payer_alias: str,
     global_payer_source: str,
     use_embeddings: bool,
+    relaxed_contact_gate: bool = False,
 ) -> MatchCandidate | None:
     evidence = Evidence()
 
@@ -456,7 +515,9 @@ def _score_singleton(
         AmountMatchKind.EXACT_TOTAL,
         AmountMatchKind.TDS_ADJUSTED,
         AmountMatchKind.PARTIAL,
-    } and _payer_gate(payer_sim, payer_source):
+    } and _payer_gate(
+        payer_sim, payer_source, relaxed_contact=relaxed_contact_gate
+    ):
         # Full synergy for strong payer; half when payer clears the gate but is typo'd/weaker.
         synergy = (
             cfg.PAYER_AMOUNT_SYNERGY
@@ -494,13 +555,22 @@ def _score_singleton(
         if amount_kind == AmountMatchKind.MISMATCH:
             return None
         # Never suggest on amount alone: payer must clear gate for this customer
-        if not _payer_gate(payer_sim, payer_source):
+        if not _payer_gate(
+            payer_sim, payer_source, relaxed_contact=relaxed_contact_gate
+        ):
+            return None
+        # Relaxed contact path: only exact/TDS amounts (never partial alone)
+        if relaxed_contact_gate and amount_kind not in {
+            AmountMatchKind.EXACT_OUTSTANDING,
+            AmountMatchKind.EXACT_TOTAL,
+            AmountMatchKind.TDS_ADJUSTED,
+        }:
             return None
 
     # Weak RE/bare-number hints without a payer match must not auto-suggest
     # (stops UTR-embedded suffixes from matching on amount alone).
     if hint_strength == InvoiceHintStrength.WEAK and not _payer_gate(
-        payer_sim, payer_source
+        payer_sim, payer_source, relaxed_contact=relaxed_contact_gate
     ):
         confidence = min(confidence, cfg.REVIEW_MIN - 1.0)
 

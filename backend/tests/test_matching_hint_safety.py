@@ -128,6 +128,68 @@ def test_exact_tie_siblings_none_with_alternatives() -> None:
     assert "INV-1024" in alt_nums and "INV-1025" in alt_nums
 
 
+def test_short_acronym_alias_does_not_steal_invoice_hint() -> None:
+    """
+    Regression: 'RC' (Redwood Clinics acronym) + reordered CR must not
+    conflict away a strong INV-1002 Brightline match.
+    """
+    from app.services.matching.aliases import build_aliases
+
+    redwood = next(c for c in load_customers() if c.customer_id == "C006")
+    aliases = build_aliases(redwood)
+    assert "RC" not in aliases
+
+    result = match_credit(
+        narration=(
+            "NEFT RC-BRIGHTLN RECVD REF162129070344 LOGISTHCS-INV-1002 CUST"
+        ),
+        payment_minor=23_600_000,
+        currency="INR",
+        txn_date="2026-09-12",
+        invoices=load_open_invoices(),
+        customers=load_customers(),
+    )
+    assert result.suggestion_type.value == "single"
+    assert result.invoice_numbers == ["INV-1002"]
+    assert result.confidence >= REVIEW_MIN
+    # Conflict path must not fire
+    assert "conflict" not in (result.evidence.get("uniqueness_note") or "").lower()
+
+
+def test_relaxed_contact_gate_exact_amount_only() -> None:
+    """
+    Contact sim in [80, 88) may match only with exact/TDS amount, ≥10pt
+    margin over the second-best customer, and confidence below the high band.
+    """
+    invoices = load_open_invoices()
+    customers = load_customers()
+
+    # Typo'd contact; exact outstanding for INV-1008 (Farah Siddiqui / C004).
+    ok = match_credit(
+        narration="IMPS/FARAH SIDEIQUH",
+        payment_minor=17_700_000,
+        currency="INR",
+        txn_date="2026-09-25",
+        invoices=invoices,
+        customers=customers,
+    )
+    assert ok.suggestion_type.value == "single"
+    assert ok.invoice_numbers == ["INV-1008"]
+    assert REVIEW_MIN <= ok.confidence < HIGH_CONFIDENCE
+    assert ok.evidence.get("components", {}).get("relaxed_contact_gate") == 1.0
+
+    # Same typo without an exact/TDS amount must stay none (no other gate change).
+    no = match_credit(
+        narration="IMPS/FARAH SIDEIQUH",
+        payment_minor=1_000_000,
+        currency="INR",
+        txn_date="2026-09-25",
+        invoices=invoices,
+        customers=customers,
+    )
+    assert no.suggestion_type.value == "none"
+
+
 def test_explicit_invoice_hint_still_resolves() -> None:
     """Explicit INV / RE hints must still pick the right sibling normally."""
     invoices = load_open_invoices()

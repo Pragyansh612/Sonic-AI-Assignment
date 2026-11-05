@@ -12,6 +12,9 @@ from __future__ import annotations
 PAYER_SIM_THRESHOLD: float = 72.0
 # Contact-name-only matches are weaker; require a higher bar to clear the gate.
 CONTACT_PAYER_SIM_THRESHOLD: float = 88.0
+# Optional relaxation (exact amount + clear margin over 2nd-best customer only):
+CONTACT_PAYER_SIM_RELAXED: float = 80.0
+CONTACT_PAYER_SECOND_BEST_MARGIN: float = 10.0
 # Invoice-hint + payer conflict: cap confidence at this when names disagree.
 HINT_CUSTOMER_CONFLICT_CAP: float = 55.0
 
