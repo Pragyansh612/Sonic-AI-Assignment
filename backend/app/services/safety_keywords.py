@@ -14,7 +14,11 @@ DISPUTE_RE = re.compile(
     re.IGNORECASE,
 )
 EXTENSION_RE = re.compile(
-    r"\b(extension|more\s+time|defer|postpone|instalment|installment|waive)\b",
+    r"\b(extensions?|extend\w*|more\s+time|extra\s+(?:time|days?|weeks?|months?)|"
+    r"(?:more|additional|few)\s+(?:days?|weeks?|months?)|grace(?:\s+period)?|"
+    r"defer\w*|postpone\w*|reschedul\w*|instal?ments?|installments?|waive\w*|"
+    r"later\s+date|next\s+(?:week|month)|pay\s+(?:later|next|after)|"
+    r"split\s+(?:this|the|it|payment)|push\s+(?:back|out))\b",
     re.IGNORECASE,
 )
 
