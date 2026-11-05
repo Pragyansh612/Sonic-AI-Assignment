@@ -29,6 +29,10 @@ from app.services.safety_keywords import is_auto_reply_or_bounce, scan_body_for_
 
 _TOKEN_RE = re.compile(r"\[AC-([A-Za-z0-9-]+)\]")
 
+AUTO_INTENTS = frozenset(
+    {"balance_query", "payment_details", "claims_paid", "promises_payment"}
+)
+
 LLM_SCHEMA = {
     "intent": "balance_query",
     "confidence": 0.0,
@@ -190,7 +194,7 @@ class InboundService:
         except Exception as exc:  # noqa: BLE001
             llm_error = str(exc)
 
-        intent = (llm_result or {}).get("intent", "other")
+        intent = str((llm_result or {}).get("intent") or "other").strip().lower()
         confidence = float((llm_result or {}).get("confidence") or 0)
         needs_human = bool((llm_result or {}).get("needs_human"))
         prose = str((llm_result or {}).get("prose_reply") or "").strip()
@@ -236,18 +240,12 @@ class InboundService:
                 "reason": "llm_error",
             }
 
+        # Allowlist: only these intents may ever be answered without a human.
         if (
             needs_human
             or mixed
             or confidence < self.settings.llm_min_confidence
-            or intent
-            in {
-                "extension_request",
-                "dispute",
-                "legal",
-                "other_company",
-                "out_of_office",
-            }
+            or intent not in AUTO_INTENTS
         ):
             # Still draft a safe reply for human edit when appropriate
             draft = None

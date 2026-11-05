@@ -143,3 +143,55 @@ async def test_injected_bank_details_never_auto_sent(db):
     )
     assert r["processed"][0]["status"] == "needs_attention"
     assert smtp.sent == []
+
+
+# ------------------------------------------------------------ M3 routing allowlist
+
+
+@pytest.mark.parametrize("intent", ["other", "thanks", "smalltalk", "out_of_office", "???"])
+async def test_unknown_intent_goes_to_needs_attention(db, intent):
+    r, smtp = await run_inbox(
+        db,
+        [mail("<m3>", "arjun@t.example", "Hi", "Thanks, got it.", "1")],
+        [llm_json(intent, prose="You are welcome, anything else is fine.")],
+    )
+    assert r["processed"][0]["status"] == "needs_attention"
+    assert smtp.sent == []
+
+
+@pytest.mark.parametrize("intent", ["claims_paid", "promises_payment"])
+async def test_payment_claims_are_acknowledged_not_marked_paid(db, intent):
+    r, smtp = await run_inbox(
+        db,
+        [mail("<m3b>", "arjun@t.example", "Hi", "We paid INV-1004 yesterday, ref N123456789", "1")],
+        [llm_json(intent, prose="Thank you, we will check our records.")],
+    )
+    assert r["processed"][0]["status"] == "auto_answered"
+    inv = await db.invoices.find_one({"invoice_number": "INV-1004"})
+    assert inv["status"] == "sent" and inv["balance_due_minor"] == 5900000
+
+
+# ------------------------------------------------------------ M4 extension regex
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Can we get two more weeks to pay?",
+        "We need a few extra days.",
+        "Could you extend the due date?",
+        "Please allow a grace period.",
+        "Can we pay next month instead?",
+        "Can we split this into instalments?",
+        "We need 10 more days please",
+        "Any chance of a later date for payment?",
+    ],
+)
+async def test_extension_phrases_always_need_attention(db, body):
+    r, smtp = await run_inbox(
+        db,
+        [mail("<m4>", "arjun@t.example", "Hi", body, "1")],
+        [llm_json("balance_query")],
+    )
+    assert r["processed"][0]["status"] == "needs_attention"
+    assert smtp.sent == []
