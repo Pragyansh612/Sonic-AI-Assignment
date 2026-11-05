@@ -106,7 +106,7 @@ class InboundService:
             headers=msg.headers,
         )
         customer = await self._customer_by_email(msg.from_address)
-        conversation = await self._resolve_conversation(msg, customer)
+        conversation, thread_mismatch = await self._resolve_conversation(msg, customer)
 
         now = utc_now().isoformat()
         await self.repo.insert_message(
@@ -148,6 +148,19 @@ class InboundService:
                 "message_id": msg.message_id,
                 "status": auto_kind,
                 "conversation_id": conversation["conversation_id"],
+            }
+
+        if thread_mismatch and customer is not None:
+            await self._flag_needs_attention(
+                conversation,
+                reason="Thread mismatch — email referenced another customer's conversation",
+                draft=None,
+                inbound=msg,
+            )
+            return {
+                "message_id": msg.message_id,
+                "status": "needs_attention",
+                "reason": "thread_mismatch",
             }
 
         if customer is None or conversation.get("kind") == "unknown":
@@ -449,7 +462,24 @@ class InboundService:
 
     async def _resolve_conversation(
         self, msg: InboundEmail, customer: dict[str, Any] | None
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], bool]:
+        """Return (conversation, thread_mismatch).
+
+        A thread found via In-Reply-To/References/subject token is only used when it
+        belongs to the sender; otherwise it is ignored and flagged as a mismatch.
+        """
+        owner = customer["customer_id"] if customer else None
+        mismatch = False
+
+        def owned(conv: dict[str, Any] | None) -> dict[str, Any] | None:
+            nonlocal mismatch
+            if conv is None:
+                return None
+            if conv.get("customer_id") != owner:
+                mismatch = True
+                return None
+            return conv
+
         # 1) In-Reply-To / References → existing message → conversation
         for ref in [msg.in_reply_to, *(msg.references or [])]:
             if not ref:
@@ -458,30 +488,34 @@ class InboundService:
                 {"message_id": ref}, {"_id": 0}
             )
             if existing:
-                conv = await self.repo.get_conversation(existing["conversation_id"])
+                conv = owned(
+                    await self.repo.get_conversation(existing["conversation_id"])
+                )
                 if conv:
-                    return conv
+                    return conv, False
         # 2) Subject token
         m = _TOKEN_RE.search(msg.subject or "")
         if m:
             cid = m.group(1)
             # tokens stored as conversation_id with or without AC- prefix
             for candidate in (cid, f"AC-{cid}" if not cid.startswith("AC-") else cid):
-                conv = await self.repo.get_conversation(candidate)
+                conv = owned(await self.repo.get_conversation(candidate))
                 if conv:
-                    return conv
+                    return conv, False
                 # also try AC- form used in reminders
-                conv = await self.repo.get_conversation(
-                    candidate if candidate.startswith("AC-") else f"AC-{candidate}"
+                conv = owned(
+                    await self.repo.get_conversation(
+                        candidate if candidate.startswith("AC-") else f"AC-{candidate}"
+                    )
                 )
                 if conv:
-                    return conv
+                    return conv, False
         # 3) customer email
         now = utc_now().isoformat()
         if customer:
             existing = await self.repo.find_by_customer(customer["customer_id"])
             if existing:
-                return existing
+                return existing, mismatch
             conversation_id = f"AC-{uuid.uuid4().hex[:10]}"
             doc = {
                 "conversation_id": conversation_id,
@@ -494,7 +528,7 @@ class InboundService:
                 "badges": [],
             }
             await self.repo.upsert_conversation(doc)
-            return doc
+            return doc, mismatch
 
         conversation_id = f"AC-UNK-{uuid.uuid4().hex[:8]}"
         doc = {
@@ -509,7 +543,7 @@ class InboundService:
             "needs_attention_reason": "Unknown sender",
         }
         await self.repo.upsert_conversation(doc)
-        return doc
+        return doc, mismatch
 
     async def _flag_needs_attention(
         self,

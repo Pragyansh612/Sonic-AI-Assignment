@@ -234,3 +234,72 @@ async def test_own_company_and_generic_words_are_not_flagged(db, body):
         [llm_json("balance_query")],
     )
     assert r["processed"][0]["status"] == "auto_answered"
+
+
+# ------------------------------------------------------------ M6 thread ownership
+
+
+async def _kestrel_thread(db):
+    from app.services.reminder_service import ReminderService
+
+    settings = await setup_customers(db)
+    smtp = FakeSmtp()
+    await ReminderService(db, smtp, settings).send_reminders()
+    conv = await db.conversations.find_one({"customer_id": "C002"}, {"_id": 0})
+    msg = await db.messages.find_one(
+        {"conversation_id": conv["conversation_id"], "direction": "outbound"}
+    )
+    return conv, msg
+
+
+async def test_other_customer_cannot_use_a_thread_token(db):
+    conv, _ = await _kestrel_thread(db)
+    tok = conv["conversation_id"]
+    r, smtp = await run_inbox(
+        db,
+        [mail("<m6>", "anil@t.example", f"Re: reminder [{tok}]", "what is my balance", "1")],
+        [llm_json("balance_query")],
+    )
+    assert r["processed"][0]["status"] == "needs_attention"
+    assert smtp.sent == []
+    stored = await db.messages.find_one({"message_id": "<m6>"})
+    assert stored["conversation_id"] != tok
+    after = await db.conversations.find_one({"conversation_id": tok})
+    assert after["status"] == conv["status"]
+
+
+async def test_other_customer_cannot_use_in_reply_to(db):
+    conv, out = await _kestrel_thread(db)
+    r, smtp = await run_inbox(
+        db,
+        [mail("<m6b>", "anil@t.example", "hello", "what is my balance", "1", irt=out["message_id"])],
+        [llm_json("balance_query")],
+    )
+    assert r["processed"][0]["status"] == "needs_attention"
+    assert (await db.messages.find_one({"message_id": "<m6b>"}))["conversation_id"] != conv["conversation_id"]
+
+
+async def test_stranger_with_token_does_not_touch_the_thread(db):
+    conv, _ = await _kestrel_thread(db)
+    tok = conv["conversation_id"]
+    r, smtp = await run_inbox(
+        db,
+        [mail("<m6c>", "stranger@evil.example", f"Re: [{tok}]", "what does Kestrel owe", "1")],
+        [llm_json("balance_query")],
+    )
+    assert r["processed"][0]["status"] == "needs_attention"
+    after = await db.conversations.find_one({"conversation_id": tok})
+    assert after["status"] == conv["status"]
+    assert smtp.sent == []
+
+
+async def test_owner_reply_via_token_still_threads(db):
+    conv, _ = await _kestrel_thread(db)
+    tok = conv["conversation_id"]
+    r, _ = await run_inbox(
+        db,
+        [mail("<m6d>", "arjun@t.example", f"Re: reminder [{tok}]", "what is our balance", "1")],
+        [llm_json("balance_query")],
+    )
+    assert r["processed"][0]["status"] == "auto_answered"
+    assert (await db.messages.find_one({"message_id": "<m6d>"}))["conversation_id"] == tok
