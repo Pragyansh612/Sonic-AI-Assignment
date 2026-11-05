@@ -13,6 +13,8 @@ from typing import Any
 from app.money import major_to_minor
 from app.services.matching import config as cfg
 
+MAX_AMOUNT_MAJOR = Decimal("1000000000000")  # 1e12 major units
+
 REQUIRED_HEADERS = ("txn_date", "narration", "reference", "credit", "debit", "currency")
 
 _MONTHS = {
@@ -248,6 +250,10 @@ def _parse_money_optional(raw: str, *, field: str) -> int | None:
         amount = Decimal(normalized)
     except (InvalidOperation, ValueError) as exc:
         raise RowParseError(f"Invalid {field} amount: {raw!r}", field) from exc
+    if not amount.is_finite():
+        raise RowParseError(f"Invalid {field} amount: {raw!r}", field)
+    if abs(amount) > MAX_AMOUNT_MAJOR:
+        raise RowParseError(f"{field.capitalize()} amount is unreasonably large: {raw!r}", field)
     if amount < 0:
         raise RowParseError(f"Negative {field} not allowed", field)
     return major_to_minor(amount)
