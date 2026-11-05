@@ -14,7 +14,15 @@ from starlette.responses import Response
 from app import __version__
 from app.config import get_settings
 from app.db import close_client, ensure_indexes, get_db
-from app.routes import admin, customers, health, invoices, organization, reconciliation
+from app.routes import (
+    admin,
+    collections,
+    customers,
+    health,
+    invoices,
+    organization,
+    reconciliation,
+)
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -32,8 +40,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    from app.scheduler import start_scheduler, stop_scheduler
+
     await ensure_indexes(get_db())
+    start_scheduler(get_settings())
     yield
+    stop_scheduler()
     await close_client()
 
 
@@ -60,6 +72,7 @@ def create_app() -> FastAPI:
     application.include_router(invoices.router, prefix="/api/v1")
     application.include_router(admin.router, prefix="/api/v1")
     application.include_router(reconciliation.router, prefix="/api/v1")
+    application.include_router(collections.router, prefix="/api/v1")
     return application
 
 

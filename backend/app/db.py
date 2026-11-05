@@ -16,7 +16,12 @@ def get_client(settings: Settings | None = None) -> AsyncIOMotorClient[Any]:
     global _client
     if _client is None:
         settings = settings or get_settings()
-        _client = AsyncIOMotorClient(settings.mongodb_uri)
+        _client = AsyncIOMotorClient(
+            settings.mongodb_uri,
+            maxPoolSize=20,
+            minPoolSize=0,
+            serverSelectionTimeoutMS=10_000,
+        )
     return _client
 
 

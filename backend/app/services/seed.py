@@ -23,6 +23,8 @@ RUNTIME_COLLECTIONS = (
     "bank_transactions",
     "match_suggestions",
     "audit_log",
+    "email_outbox",
+    "job_locks",
 )
 
 

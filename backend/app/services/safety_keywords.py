@@ -1,0 +1,81 @@
+"""Deterministic keyword/regex safety net applied before trusting the LLM."""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+LEGAL_RE = re.compile(
+    r"\b(legal|lawyer|advocate|court|notice|sue|litigation|consumer\s+forum)\b",
+    re.IGNORECASE,
+)
+DISPUTE_RE = re.compile(
+    r"\b(dispute|incorrect|wrong\s+amount|not\s+received|overcharged)\b",
+    re.IGNORECASE,
+)
+EXTENSION_RE = re.compile(
+    r"\b(extension|more\s+time|defer|postpone|instalment|installment|waive)\b",
+    re.IGNORECASE,
+)
+
+
+def scan_body_for_policy_hits(
+    body: str,
+    *,
+    customer_id: str,
+    all_customers: list[dict[str, Any]],
+    all_invoices: list[dict[str, Any]],
+) -> list[str]:
+    hits: list[str] = []
+    if LEGAL_RE.search(body):
+        hits.append("legal")
+    if DISPUTE_RE.search(body):
+        hits.append("dispute")
+    if EXTENSION_RE.search(body):
+        hits.append("extension")
+
+    for other in all_customers:
+        if other["customer_id"] == customer_id:
+            continue
+        name = other["name"]
+        tokens = [t for t in re.split(r"\W+", name) if len(t) > 3]
+        if len(tokens) >= 2:
+            phrase = f"{tokens[0]} {tokens[1]}"
+            if phrase.lower() in body.lower():
+                hits.append("other_company")
+                break
+    for inv in all_invoices:
+        if inv["customer_id"] == customer_id:
+            continue
+        if inv["invoice_number"].upper() in body.upper():
+            hits.append("other_company")
+            break
+    return hits
+
+
+def is_auto_reply_or_bounce(
+    *,
+    subject: str,
+    from_address: str,
+    headers: dict[str, str],
+) -> tuple[bool, str | None]:
+    auto_submitted = (headers.get("Auto-Submitted") or "").lower()
+    if auto_submitted and auto_submitted != "no":
+        return True, "auto_reply"
+    precedence = (headers.get("Precedence") or "").lower()
+    if precedence in {"bulk", "auto_reply", "list"}:
+        return True, "auto_reply"
+    if (headers.get("X-Autoreply") or "").strip():
+        return True, "auto_reply"
+    ctype = (headers.get("Content-Type") or "").lower()
+    if "multipart/report" in ctype:
+        return True, "bounce"
+    sender = from_address.lower()
+    if "mailer-daemon" in sender or sender.startswith("postmaster@"):
+        return True, "bounce"
+    subj = subject.lower()
+    if "out of office" in subj or "out-of-office" in subj:
+        return True, "auto_reply"
+    if "undelivered" in subj or "delivery status notification" in subj:
+        return True, "bounce"
+    return False, None

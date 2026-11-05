@@ -65,7 +65,15 @@ class Settings(BaseSettings):
     imap_user: str = Field(default="", alias="IMAP_USER")
     imap_password: str = Field(default="", alias="IMAP_PASSWORD")
     email_from_name: str = Field(default="AcmeCorp Accounts Team", alias="EMAIL_FROM_NAME")
-    reminder_cooldown_hours: int = Field(default=24, alias="REMINDER_COOLDOWN_HOURS")
+    reminder_cooldown_hours: int = Field(default=72, alias="REMINDER_COOLDOWN_HOURS")
+    email_dry_run: bool = Field(default=True, alias="EMAIL_DRY_RUN")
+    enable_reminder_scheduler: bool = Field(
+        default=False, alias="ENABLE_REMINDER_SCHEDULER"
+    )
+    enable_inbox_poll: bool = Field(default=False, alias="ENABLE_INBOX_POLL")
+    inbox_poll_seconds: int = Field(default=120, alias="INBOX_POLL_SECONDS")
+    llm_min_confidence: float = Field(default=0.75, alias="LLM_MIN_CONFIDENCE")
+    max_email_body_chars: int = Field(default=12_000, alias="MAX_EMAIL_BODY_CHARS")
 
     llm_provider: str = Field(default="openai_compatible", alias="LLM_PROVIDER")
     llm_api_key: str = Field(default="", alias="LLM_API_KEY")
