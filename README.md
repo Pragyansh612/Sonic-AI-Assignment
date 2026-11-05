@@ -197,8 +197,8 @@ curl -s -X POST …/needs-attention/{id}/dismiss
 | Security checklist + regression tests | **Finished** |
 | Bonus: payment-email ↔ statement evidence | **Finished** (capped boost) |
 | README (this file) | **Finished** |
-| `docs/explanation.md` + PDF | See Phase 5d |
-| `docs/video-script.md` | See Phase 5e |
+| `docs/explanation.md` + `docs/explanation.pdf` | **Finished** (`python scripts/build_explanation_pdf.py`) |
+| `docs/video-script.md` | **Finished** |
 | Live two-Gmail soak beyond dry-run | **Operator-dependent** (credentials) |
 
 ## Matching (short)
