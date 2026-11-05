@@ -71,7 +71,20 @@ class InboundService:
             messages = await self.imap.fetch_unseen()
             processed = []
             for msg in messages:
-                result = await self.process_message(msg)
+                try:
+                    result = await self.process_message(msg)
+                except Exception as exc:  # noqa: BLE001
+                    # Keep the message unseen + unprocessed so the next run retries it,
+                    # flag it for a human, and keep going with the rest of the batch.
+                    await self._record_failure(msg, exc)
+                    processed.append(
+                        {
+                            "message_id": msg.message_id,
+                            "status": "error",
+                            "error": f"{type(exc).__name__}: {exc}",
+                        }
+                    )
+                    continue
                 processed.append(result)
                 if msg.uid:
                     await self.imap.mark_seen(msg.uid)
@@ -79,9 +92,30 @@ class InboundService:
         finally:
             await self.repo.release_lock("inbox", lock_owner)
 
+    async def _record_failure(self, msg: InboundEmail, exc: Exception) -> None:
+        stored = await self.db.messages.find_one(
+            {"message_id": msg.message_id}, {"_id": 0, "conversation_id": 1}
+        )
+        if not stored:
+            return
+        try:
+            await self.repo.update_conversation(
+                stored["conversation_id"],
+                status="needs_attention",
+                needs_attention_reason=f"Processing failed, will retry: {type(exc).__name__}: {exc}",
+                updated_at=utc_now().isoformat(),
+            )
+        except Exception:  # noqa: BLE001 — never mask the original failure
+            pass
+
     async def process_message(self, msg: InboundEmail) -> dict[str, Any]:
-        if await self.repo.message_exists(msg.message_id):
+        if await self.repo.message_processed(msg.message_id):
             return {"message_id": msg.message_id, "status": "duplicate"}
+        result = await self._process_message(msg)
+        await self.repo.mark_message_processed(msg.message_id)
+        return result
+
+    async def _process_message(self, msg: InboundEmail) -> dict[str, Any]:
 
         # Strip quoted history before any safety scan or LLM call so our own
         # reminder text in a reply thread cannot re-trigger policy keywords.
@@ -114,6 +148,7 @@ class InboundService:
                 "message_id": msg.message_id,
                 "conversation_id": conversation["conversation_id"],
                 "direction": "inbound",
+                "processed": False,
                 "kind": auto_kind or "customer_email",
                 "subject": msg.subject,
                 "body": msg.body_text,
@@ -122,14 +157,10 @@ class InboundService:
                 "in_reply_to": msg.in_reply_to,
                 "references": msg.references,
                 "headers": {
-                    k: msg.headers.get(k)
-                    for k in (
-                        "Auto-Submitted",
-                        "Precedence",
-                        "X-Autoreply",
-                        "Content-Type",
-                    )
-                    if k in msg.headers
+                    k: v
+                    for k, v in msg.headers.items()
+                    if k.lower()
+                    in ("auto-submitted", "precedence", "x-autoreply", "content-type")
                 },
                 "created_at": now,
             }

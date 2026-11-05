@@ -303,3 +303,170 @@ async def test_owner_reply_via_token_still_threads(db):
     )
     assert r["processed"][0]["status"] == "auto_answered"
     assert (await db.messages.find_one({"message_id": "<m6d>"}))["conversation_id"] == tok
+
+
+# ------------------------------------------------------------ M1 never lose a message
+
+
+class FlakySmtp(FakeSmtp):
+    def __init__(self, fail_times=1):
+        super().__init__()
+        self.fail_times = fail_times
+
+    async def send(self, email):
+        if self.fail_times > 0:
+            self.fail_times -= 1
+            raise RuntimeError("smtp down")
+        return await super().send(email)
+
+
+async def test_smtp_failure_keeps_message_retryable_and_flagged(db):
+    settings = await setup_customers(db)
+    smtp = FlakySmtp(1)
+    imap = FakeImap([mail("<m1>", "arjun@t.example", "Hi", "balance?", "1")])
+    svc = InboundService(
+        db, imap=imap, smtp=smtp,
+        llm=FakeLlm([llm_json("balance_query"), llm_json("balance_query")]),
+        settings=settings,
+    )
+    first = await svc.check_inbox()
+    assert first["processed"][0]["status"] == "error"
+    assert imap.seen == []  # not marked seen
+    conv = await db.conversations.find_one({"customer_id": "C002"})
+    assert conv["status"] == "needs_attention"
+    assert "smtp down" in conv["needs_attention_reason"]
+
+    second = await svc.check_inbox()
+    assert second["processed"][0]["status"] == "auto_answered"
+    assert len(smtp.sent) == 1
+    assert imap.seen == ["1"]
+    third = await svc.check_inbox()
+    assert third["processed"] == []  # now truly done
+
+
+async def test_poison_message_does_not_block_the_batch(db):
+    settings = await setup_customers(db)
+    smtp = FlakySmtp(1)
+    imap = FakeImap(
+        [
+            mail("<p1>", "arjun@t.example", "Hi", "balance?", "1"),
+            mail("<p2>", "anil@t.example", "Hi", "balance?", "2"),
+        ]
+    )
+    svc = InboundService(
+        db, imap=imap, smtp=smtp,
+        llm=FakeLlm([llm_json("balance_query"), llm_json("balance_query")]),
+        settings=settings,
+    )
+    res = await svc.check_inbox()
+    assert [p["status"] for p in res["processed"]] == ["error", "auto_answered"]
+    assert imap.seen == ["2"]
+
+
+# ------------------------------------------------------------ M2 BODY.PEEK
+
+
+async def test_imap_fetch_does_not_set_seen_flag(monkeypatch):
+    import imaplib
+
+    from app.integrations import imap_client
+
+    fetched: list[str] = []
+    raw = b"From: a@b.example\r\nSubject: s\r\nMessage-ID: <x@y>\r\n\r\nhello"
+
+    class FakeConn:
+        def __init__(self, *a, **k): ...
+        def login(self, *a): return ("OK", [])
+        def select(self, *a, **k): return ("OK", [])
+        def logout(self): ...
+        def uid(self, cmd, *args):
+            if cmd == "search":
+                return ("OK", [b"7"])
+            if cmd == "fetch":
+                fetched.append(args[1])
+                return ("OK", [(b"7 (BODY[] {1}", raw)])
+            return ("OK", [])
+
+    monkeypatch.setattr(imaplib, "IMAP4_SSL", FakeConn)
+    get_settings.cache_clear()
+    settings = get_settings().model_copy(
+        update={"email_dry_run": False, "imap_password": "x", "imap_user": "u"}
+    )
+    out = await imap_client.ImapMailer(settings).fetch_unseen()
+    assert len(out) == 1
+    assert fetched and "PEEK" in fetched[0].upper() and "RFC822" not in fetched[0].upper()
+
+
+# ------------------------------------------------------------ M7 reminders vs needs_attention
+
+
+async def test_reminder_does_not_reset_needs_attention(db):
+    from datetime import timedelta
+
+    from app.clock import utc_now
+    from app.services.reminder_service import ReminderService
+
+    settings = await setup_customers(db)
+    await ReminderService(db, FakeSmtp(), settings).send_reminders()
+    conv = await db.conversations.find_one({"customer_id": "C002"})
+    await db.conversations.update_one(
+        {"conversation_id": conv["conversation_id"]},
+        {"$set": {
+            "status": "needs_attention",
+            "needs_attention_reason": "customer asked something odd",
+            "last_reminder_at": (utc_now() - timedelta(days=10)).isoformat(),
+        }},
+    )
+    res = await ReminderService(db, FakeSmtp(), settings).send_reminders()
+    assert any(s["customer_id"] == "C002" for s in res["sent"])
+    after = await db.conversations.find_one({"conversation_id": conv["conversation_id"]})
+    assert after["status"] == "needs_attention"
+    assert after["needs_attention_reason"] == "customer asked something odd"
+
+
+# ------------------------------------------------------------ M9 auto-reply detection
+
+
+@pytest.mark.parametrize(
+    "headers,subject,sender,kind",
+    [
+        ({"Auto-submitted": "auto-replied"}, "Re: x", "a@b.example", "auto_reply"),
+        ({"auto-submitted": "auto-generated"}, "Re: x", "a@b.example", "auto_reply"),
+        ({"X-AUTOREPLY": "yes"}, "Re: x", "a@b.example", "auto_reply"),
+        ({"precedence": "Bulk"}, "Re: x", "a@b.example", "auto_reply"),
+        ({}, "Automatic reply: Payment reminder", "a@b.example", "auto_reply"),
+        ({}, "Autoreply: away", "a@b.example", "auto_reply"),
+        ({"content-type": "multipart/report; report-type=delivery-status"}, "x", "a@b.example", "bounce"),
+        ({}, "Delivery Status Notification (Failure)", "Mailer-Daemon@googlemail.com", "bounce"),
+    ],
+)
+def test_auto_reply_detection_is_case_insensitive(headers, subject, sender, kind):
+    from app.services.safety_keywords import is_auto_reply_or_bounce
+
+    assert is_auto_reply_or_bounce(subject=subject, from_address=sender, headers=headers) == (True, kind)
+
+
+def test_normal_mail_is_not_flagged_as_auto():
+    from app.services.safety_keywords import is_auto_reply_or_bounce
+
+    assert is_auto_reply_or_bounce(
+        subject="Re: Payment reminder", from_address="a@b.example",
+        headers={"Auto-Submitted": "no"},
+    ) == (False, None)
+
+
+# ------------------------------------------------------------ M10 parser robustness
+
+
+@pytest.mark.parametrize("value", ["NaN", "nan", "Infinity", "-Infinity", "1e30", "9" * 40])
+def test_non_finite_or_huge_amounts_are_row_errors(value):
+    from app.services.statement_parser import parse_statement_csv
+
+    csv_text = (
+        "txn_date,narration,reference,credit,debit,currency\n"
+        f"2026-09-05,NEFT X,R1,{value},,INR\n"
+        "2026-09-06,NEFT Y,R2,500,,INR\n"
+    )
+    res = parse_statement_csv(csv_text)
+    assert len(res.errors) == 1 and res.errors[0].row_number == 1
+    assert [t.credit_minor for t in res.transactions] == [50000]

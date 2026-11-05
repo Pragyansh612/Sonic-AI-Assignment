@@ -64,6 +64,16 @@ class CollectionsRepository:
             is not None
         )
 
+    async def message_processed(self, message_id: str) -> bool:
+        """True once an inbound message was fully handled (retries are not duplicates)."""
+        doc = await self.messages.find_one({"message_id": message_id}, {"processed": 1})
+        return doc is not None and doc.get("processed", True) is True
+
+    async def mark_message_processed(self, message_id: str) -> None:
+        await self.messages.update_one(
+            {"message_id": message_id}, {"$set": {"processed": True}}
+        )
+
     async def list_messages(self, conversation_id: str) -> list[dict[str, Any]]:
         cursor = self.messages.find(
             {"conversation_id": conversation_id}, {"_id": 0}
