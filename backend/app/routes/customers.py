@@ -7,7 +7,7 @@ from app.routes.deps import DbDep
 from app.security import require_admin_token
 from app.services.customers import CustomerService
 
-router = APIRouter(prefix="/customers", tags=["customers"])
+router = APIRouter(prefix="/customers", tags=["customers"], dependencies=[Depends(require_admin_token)])
 
 
 @router.get("", response_model=list[CustomerOut])

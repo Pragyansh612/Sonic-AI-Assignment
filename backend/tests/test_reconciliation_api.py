@@ -44,7 +44,7 @@ async def test_upload_and_approve_exact(
     )
     assert ok.status_code == 200, ok.text
 
-    inv = await client.get("/api/v1/invoices/INV-1004")
+    inv = await client.get("/api/v1/invoices/INV-1004", headers=admin_headers)
     assert inv.json()["status"] == "paid"
     assert inv.json()["balance_due"]["minor"] == 0
 
@@ -98,7 +98,7 @@ async def test_tds_close_and_leave_open(
         json={"tds_mode": "close_tds"},
     )
     assert closed.status_code == 200, closed.text
-    inv = await client.get("/api/v1/invoices/INV-1007")
+    inv = await client.get("/api/v1/invoices/INV-1007", headers=admin_headers)
     assert inv.json()["status"] == "paid"
     assert inv.json()["tds_written_off"]["minor"] > 0
 
@@ -132,7 +132,7 @@ async def test_leave_open_partial(
         json={"tds_mode": "leave_open"},
     )
     assert resp.status_code == 200, resp.text
-    inv = await client.get("/api/v1/invoices/INV-1013")
+    inv = await client.get("/api/v1/invoices/INV-1013", headers=admin_headers)
     body = inv.json()
     assert body["status"] == "sent"
     assert body["balance_due"]["minor"] == 47200000 - 20000000
@@ -195,7 +195,7 @@ async def test_multi_invoice_approve(
     )
     assert resp.status_code == 200, resp.text
     for num in ("INV-1010", "INV-1011", "INV-1012"):
-        inv = await client.get(f"/api/v1/invoices/{num}")
+        inv = await client.get(f"/api/v1/invoices/{num}", headers=admin_headers)
         assert inv.json()["status"] == "paid"
 
 

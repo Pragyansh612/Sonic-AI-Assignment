@@ -470,3 +470,69 @@ def test_non_finite_or_huge_amounts_are_row_errors(value):
     res = parse_statement_csv(csv_text)
     assert len(res.errors) == 1 and res.errors[0].row_number == 1
     assert [t.credit_minor for t in res.transactions] == [50000]
+
+
+# ------------------------------------------------------------ M8 human Send needs acknowledgement
+
+
+async def _needs_attention_conv(db):
+    r, _ = await run_inbox(
+        db,
+        [mail("<m8>", "arjun@t.example", "Hi", "Can we get two more weeks?", "1")],
+        [llm_json("extension_request", needs=True, prose="We will check.")],
+    )
+    return (await db.conversations.find_one({"customer_id": "C002"}))["conversation_id"]
+
+
+BAD_DRAFT = "Pay account 5555 now. We extend your due date to 2030-01-01."
+
+
+async def test_human_send_blocked_when_validator_fails(client, db, admin_headers):
+    cid = await _needs_attention_conv(db)
+    res = await client.post(
+        f"/api/v1/collections/needs-attention/{cid}/send",
+        json={"draft": BAD_DRAFT}, headers=admin_headers,
+    )
+    assert res.status_code == 409
+    body = res.json()["detail"]
+    assert body["code"] == "validation_warnings" and body["warnings"]
+    assert await db.email_outbox.count_documents({}) == 0
+    assert (await db.conversations.find_one({"conversation_id": cid}))["status"] == "needs_attention"
+
+
+async def test_human_send_allowed_with_acknowledgement(client, db, admin_headers):
+    cid = await _needs_attention_conv(db)
+    res = await client.post(
+        f"/api/v1/collections/needs-attention/{cid}/send",
+        json={"draft": BAD_DRAFT, "acknowledge_warnings": True}, headers=admin_headers,
+    )
+    assert res.status_code == 200 and res.json()["warnings"]
+    assert await db.email_outbox.count_documents({}) == 1
+
+
+async def test_clean_human_draft_sends_without_acknowledgement(client, db, admin_headers):
+    cid = await _needs_attention_conv(db)
+    res = await client.post(
+        f"/api/v1/collections/needs-attention/{cid}/send",
+        json={"draft": "Dear Arjun, we have noted your request and will revert shortly."},
+        headers=admin_headers,
+    )
+    assert res.status_code == 200, res.text
+
+
+# ------------------------------------------------------------ M12 reads need the admin token
+
+
+@pytest.mark.parametrize(
+    "path",
+    ["/api/v1/organization", "/api/v1/customers", "/api/v1/customers/C002",
+     "/api/v1/invoices", "/api/v1/invoices/INV-1004"],
+)
+async def test_data_reads_require_admin_token(client, admin_headers, path):
+    assert (await client.get(path)).status_code == 401
+    assert (await client.get(path, headers={"X-Admin-Token": "wrong"})).status_code == 401
+    assert (await client.get(path, headers=admin_headers)).status_code == 200
+
+
+async def test_health_stays_public(client):
+    assert (await client.get("/api/v1/health")).status_code == 200

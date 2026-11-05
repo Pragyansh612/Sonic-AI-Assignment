@@ -77,5 +77,5 @@ async def test_reupload_after_approve_blocks_second_application(
     assert blocked.status_code == 409
 
     # Balance must not have been applied twice
-    inv = await client.get("/api/v1/invoices/INV-1013")
+    inv = await client.get("/api/v1/invoices/INV-1013", headers=admin_headers)
     assert inv.json()["balance_due"]["minor"] == 47200000 - 20000000

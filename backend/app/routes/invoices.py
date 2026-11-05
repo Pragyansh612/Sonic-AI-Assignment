@@ -10,7 +10,7 @@ from app.security import require_admin_token
 from app.services.invoice_service import InvoiceService
 from app.services.reconciliation_service import ReconciliationService
 
-router = APIRouter(prefix="/invoices", tags=["invoices"])
+router = APIRouter(prefix="/invoices", tags=["invoices"], dependencies=[Depends(require_admin_token)])
 
 
 @router.get("", response_model=list[InvoiceOut])

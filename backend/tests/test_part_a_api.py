@@ -16,8 +16,10 @@ async def test_health(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_organization(client: AsyncClient) -> None:
-    r = await client.get("/api/v1/organization")
+async def test_organization(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    r = await client.get("/api/v1/organization", headers=admin_headers)
     assert r.status_code == 200
     body = r.json()
     assert body["name"] == "AcmeCorp"
@@ -27,8 +29,10 @@ async def test_organization(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_list_customers(client: AsyncClient) -> None:
-    r = await client.get("/api/v1/customers")
+async def test_list_customers(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    r = await client.get("/api/v1/customers", headers=admin_headers)
     assert r.status_code == 200
     customers = r.json()
     assert len(customers) == 9
@@ -67,9 +71,9 @@ async def test_update_customer_email(
 
 @pytest.mark.asyncio
 async def test_invoices_counts_and_money(
-    client: AsyncClient,
+    client: AsyncClient, admin_headers: dict[str, str]
 ) -> None:
-    r = await client.get("/api/v1/invoices")
+    r = await client.get("/api/v1/invoices", headers=admin_headers)
     assert r.status_code == 200
     invoices = r.json()
     assert len(invoices) == 27
@@ -102,8 +106,10 @@ async def test_invoices_counts_and_money(
 
 
 @pytest.mark.asyncio
-async def test_overdue_with_demo_today(client: AsyncClient) -> None:
-    r = await client.get("/api/v1/invoices", params={"overdue_only": True})
+async def test_overdue_with_demo_today(
+    client: AsyncClient, admin_headers: dict[str, str]
+) -> None:
+    r = await client.get("/api/v1/invoices", params={"overdue_only": True}, headers=admin_headers)
     assert r.status_code == 200
     overdue = r.json()
     numbers = {inv["invoice_number"] for inv in overdue}
@@ -163,10 +169,10 @@ async def test_reset_restores_seed_email_and_partial_payment(
     assert r.status_code == 200
     assert r.json()["ok"] is True
 
-    cust = await client.get("/api/v1/customers/C002")
+    cust = await client.get("/api/v1/customers/C002", headers=admin_headers)
     assert cust.json()["contact_email"] == "customer2@example.com"
 
-    inv = await client.get("/api/v1/invoices/INV-1023")
+    inv = await client.get("/api/v1/invoices/INV-1023", headers=admin_headers)
     body = inv.json()
     assert body["amount_paid"]["minor"] == 200_000
     assert body["balance_due"]["minor"] == 400_000
