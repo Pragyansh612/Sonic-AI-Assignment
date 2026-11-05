@@ -155,4 +155,42 @@ export const api = {
         body: JSON.stringify({ invoice_numbers }),
       },
     ),
+  sendReminders: () =>
+    proxy<Record<string, unknown>>("collections/reminders/send", {
+      method: "POST",
+      body: "{}",
+    }),
+  checkInbox: () =>
+    proxy<Record<string, unknown>>("collections/inbox/check", {
+      method: "POST",
+      body: "{}",
+    }),
+  listConversations: (status?: string) =>
+    proxy<Record<string, unknown>[]>("collections/conversations", {
+      query: { status },
+    }),
+  getConversation: (id: string) =>
+    proxy<Record<string, unknown>>(
+      `collections/conversations/${encodeURIComponent(id)}`,
+    ),
+  listNeedsAttention: () =>
+    proxy<Record<string, unknown>[]>("collections/needs-attention"),
+  updateNeedsAttentionDraft: (id: string, draft: string) =>
+    proxy<Record<string, unknown>>(
+      `collections/needs-attention/${encodeURIComponent(id)}`,
+      { method: "PATCH", body: JSON.stringify({ draft }) },
+    ),
+  sendNeedsAttention: (id: string, draft?: string) =>
+    proxy<Record<string, unknown>>(
+      `collections/needs-attention/${encodeURIComponent(id)}/send`,
+      {
+        method: "POST",
+        body: JSON.stringify(draft !== undefined ? { draft } : {}),
+      },
+    ),
+  dismissNeedsAttention: (id: string) =>
+    proxy<Record<string, unknown>>(
+      `collections/needs-attention/${encodeURIComponent(id)}/dismiss`,
+      { method: "POST", body: "{}" },
+    ),
 };

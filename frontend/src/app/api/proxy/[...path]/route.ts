@@ -32,6 +32,22 @@ const ALLOWLIST: Rule[] = [
     methods: new Set(["POST"]),
     pattern: /^reconciliation\/suggestions\/[^/]+\/(approve|reject|choose)$/,
   },
+  { methods: new Set(["POST"]), pattern: /^collections\/reminders\/send$/ },
+  { methods: new Set(["POST"]), pattern: /^collections\/inbox\/check$/ },
+  { methods: new Set(["GET"]), pattern: /^collections\/conversations$/ },
+  {
+    methods: new Set(["GET"]),
+    pattern: /^collections\/conversations\/[^/]+$/,
+  },
+  { methods: new Set(["GET"]), pattern: /^collections\/needs-attention$/ },
+  {
+    methods: new Set(["PATCH"]),
+    pattern: /^collections\/needs-attention\/[^/]+$/,
+  },
+  {
+    methods: new Set(["POST"]),
+    pattern: /^collections\/needs-attention\/[^/]+\/(send|dismiss)$/,
+  },
 ];
 
 function isAllowed(method: string, apiPath: string): boolean {
