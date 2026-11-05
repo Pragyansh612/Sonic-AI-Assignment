@@ -35,7 +35,7 @@ class ImapMailer:
             uids = data[0].split()
             results: list[InboundEmail] = []
             for uid in uids:
-                typ, msg_data = client.uid("fetch", uid, "(RFC822)")
+                typ, msg_data = client.uid("fetch", uid, "(BODY.PEEK[])")  # PEEK keeps the message unseen until processed
                 if typ != "OK" or not msg_data or not msg_data[0]:
                     continue
                 raw = msg_data[0][1]
