@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { isAllowedOrigin } from "@/lib/originGuard";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -87,6 +88,19 @@ async function forward(
 ): Promise<NextResponse> {
   const method = request.method.toUpperCase();
   const apiPath = pathParts.map(decodeURIComponent).join("/");
+
+  if (
+    !isAllowedOrigin(method, {
+      origin: request.headers.get("origin"),
+      host: request.headers.get("host"),
+      secFetchSite: request.headers.get("sec-fetch-site"),
+    })
+  ) {
+    return NextResponse.json(
+      { detail: "Cross-origin request blocked" },
+      { status: 403 },
+    );
+  }
 
   if (!isAllowed(method, apiPath)) {
     return NextResponse.json(
