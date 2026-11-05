@@ -1,0 +1,110 @@
+[
+  {
+    "row": 1,
+    "expect": "single",
+    "invoices": ["INV-1002"],
+    "note": "typo Brightln + invoice number"
+  },
+  {
+    "row": 2,
+    "expect": "single",
+    "invoices": ["INV-1005"],
+    "note": "compact INV1005 disambiguates equal amounts"
+  },
+  {
+    "row": 3,
+    "expect": "single",
+    "invoices": ["INV-1007"],
+    "note": "TDS-adjusted Quillon, no invoice number"
+  },
+  {
+    "row": 4,
+    "expect": "single",
+    "invoices": ["INV-1013"],
+    "note": "partial Orbis without invoice number"
+  },
+  {
+    "row": 5,
+    "expect": "single",
+    "invoices": ["INV-1021"],
+    "note": "USD exact with invoice number"
+  },
+  {
+    "row": 6,
+    "expect": "none",
+    "invoices": [],
+    "note": "wrong currency EUR vs USD invoice"
+  },
+  {
+    "row": 7,
+    "expect": "none",
+    "invoices": [],
+    "note": "payment before invoice_date for INV-1004"
+  },
+  {
+    "row": 8,
+    "expect": "multi",
+    "invoices": ["INV-1010", "INV-1011", "INV-1012"],
+    "note": "multi-invoice Saffron Peak exact sum"
+  },
+  {
+    "row": 9,
+    "expect": "single",
+    "invoices": ["INV-1017"],
+    "note": "contact name Anil Menon + Redwood"
+  },
+  {
+    "row": 10,
+    "expect": "none",
+    "invoices": [],
+    "note": "unknown payer — never amount-alone"
+  },
+  {
+    "row": 11,
+    "expect": "none",
+    "invoices": [],
+    "note": "interest credit"
+  },
+  {
+    "row": 12,
+    "expect": "debit",
+    "invoices": [],
+    "note": "debit skipped"
+  },
+  {
+    "row": 13,
+    "expect": "single",
+    "invoices": ["INV-1002"],
+    "note": "first of duplicate pair"
+  },
+  {
+    "row": 14,
+    "expect": "single",
+    "invoices": ["INV-1002"],
+    "note": "duplicate flagged but still matchable"
+  },
+  {
+    "row": 15,
+    "expect": "none",
+    "invoices": [],
+    "note": "overpayment GBP — prefer no match / low confidence"
+  },
+  {
+    "row": 16,
+    "expect": "single",
+    "invoices": ["INV-1025"],
+    "note": "weak RE 1025 reference (payment after invoice_date)"
+  },
+  {
+    "row": 17,
+    "expect": "none",
+    "invoices": [],
+    "note": "invoice number of DIFFERENT customer (Quillon INV-1007 on Kestrel payer) — conflict/no high match"
+  },
+  {
+    "row": 18,
+    "expect": "none",
+    "invoices": [],
+    "note": "unknown Maple Retail"
+  }
+]

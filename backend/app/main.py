@@ -14,7 +14,7 @@ from starlette.responses import Response
 from app import __version__
 from app.config import get_settings
 from app.db import close_client, ensure_indexes, get_db
-from app.routes import admin, customers, health, invoices, organization
+from app.routes import admin, customers, health, invoices, organization, reconciliation
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -59,6 +59,7 @@ def create_app() -> FastAPI:
     application.include_router(customers.router, prefix="/api/v1")
     application.include_router(invoices.router, prefix="/api/v1")
     application.include_router(admin.router, prefix="/api/v1")
+    application.include_router(reconciliation.router, prefix="/api/v1")
     return application
 
 

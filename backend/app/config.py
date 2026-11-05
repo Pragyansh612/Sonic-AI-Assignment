@@ -75,8 +75,18 @@ class Settings(BaseSettings):
     )
     llm_model: str = Field(default="gemini-2.0-flash", alias="LLM_MODEL")
 
-    match_use_embeddings: bool = Field(default=False, alias="MATCH_USE_EMBEDDINGS")
+    match_use_embeddings: bool = Field(
+        default=False, alias="MATCH_USE_EMBEDDINGS"
+    )  # ENABLE_EMBEDDINGS alias below
+    enable_embeddings: bool = Field(default=False, alias="ENABLE_EMBEDDINGS")
     match_use_llm: bool = Field(default=False, alias="MATCH_USE_LLM")
+    enable_llm_match_assist: bool = Field(
+        default=False, alias="ENABLE_LLM_MATCH_ASSIST"
+    )
+
+    @property
+    def embeddings_enabled(self) -> bool:
+        return bool(self.match_use_embeddings or self.enable_embeddings)
 
 
 @lru_cache

@@ -1,10 +1,14 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from typing import Any
+
+from fastapi import APIRouter, Depends, Query
 
 from app.models.invoice import InvoiceOut
 from app.routes.deps import DbDep
+from app.security import require_admin_token
 from app.services.invoice_service import InvoiceService
+from app.services.reconciliation_service import ReconciliationService
 
 router = APIRouter(prefix="/invoices", tags=["invoices"])
 
@@ -21,6 +25,15 @@ async def list_invoices(
         status_filter=status,
         overdue_only=overdue_only,
     )
+
+
+@router.get(
+    "/open",
+    dependencies=[Depends(require_admin_token)],
+)
+async def list_open_invoices(db: DbDep) -> list[dict[str, Any]]:
+    """Open (sent, unpaid) invoices for the reconciliation choose dropdown."""
+    return await ReconciliationService(db).list_open_invoices()
 
 
 @router.get("/{invoice_number}", response_model=InvoiceOut)
