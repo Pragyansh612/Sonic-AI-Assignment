@@ -122,6 +122,7 @@ export type BankTransaction = {
   is_credit: boolean;
   is_debit: boolean;
   possible_duplicate?: boolean;
+  payment_email_evidence?: Array<Record<string, unknown>>;
   status: string;
   suggestion?: MatchSuggestion | null;
 };

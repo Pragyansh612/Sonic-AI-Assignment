@@ -60,6 +60,12 @@ class ReconciliationService:
         customer_models = [_to_customer(d) for d in customer_docs]
         settings = get_settings()
         use_embeddings = settings.embeddings_enabled
+        from app.services.payment_email_evidence import (
+            evidence_for_transaction,
+            list_payment_email_evidence,
+        )
+
+        email_evidence_docs = await list_payment_email_evidence(self._db)
 
         txn_docs: list[dict[str, Any]] = []
         suggestion_docs: list[dict[str, Any]] = []
@@ -143,7 +149,24 @@ class ReconciliationService:
                 invoices=open_models,
                 customers=customer_models,
                 use_embeddings=use_embeddings,
+                email_evidence=email_evidence_docs,
+                bank_reference=row.reference,
             )
+            linked = evidence_for_transaction(
+                narration=row.narration,
+                reference=row.reference,
+                invoice_numbers=result.invoice_numbers
+                or [
+                    n
+                    for d in email_evidence_docs
+                    for n in (d.get("invoice_numbers") or [])
+                ],
+                evidence_docs=email_evidence_docs,
+            )
+            # Persist on the bank row for UI even when suggestion is none
+            if linked:
+                base["payment_email_evidence"] = linked
+                txn_docs[-1]["payment_email_evidence"] = linked
             suggestion_docs.append(
                 {
                     "suggestion_id": f"sug_{uuid.uuid4().hex[:12]}",
@@ -162,6 +185,7 @@ class ReconciliationService:
                     "customer_mismatch": False,
                     "mismatch_warning": None,
                     "fingerprint": fingerprint,
+                    "payment_email_evidence": linked,
                 }
             )
 

@@ -276,6 +276,15 @@ class InboundService:
                     conversation["conversation_id"],
                     note=f"Customer message intent={intent}: {msg.body_text[:500]}",
                 )
+                from app.services.payment_email_evidence import store_payment_email_evidence
+
+                await store_payment_email_evidence(
+                    self.db,
+                    customer_id=customer["customer_id"],
+                    message_id=msg.message_id,
+                    conversation_id=conversation["conversation_id"],
+                    body=msg.body_text,
+                )
             return {
                 "message_id": msg.message_id,
                 "status": "needs_attention",
@@ -293,6 +302,15 @@ class InboundService:
                 conversation["conversation_id"],
                 note=f"{intent}: {msg.body_text[:500]}",
                 updated_at=now,
+            )
+            from app.services.payment_email_evidence import store_payment_email_evidence
+
+            await store_payment_email_evidence(
+                self.db,
+                customer_id=customer["customer_id"],
+                message_id=msg.message_id,
+                conversation_id=conversation["conversation_id"],
+                body=msg.body_text,
             )
 
         draft = compose_customer_reply(

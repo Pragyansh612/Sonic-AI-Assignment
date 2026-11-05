@@ -60,6 +60,10 @@ SIM_EMBEDDING_WEIGHT: float = 0.15
 # TDS tolerance when approving close_tds (1 minor unit)
 TDS_TOLERANCE_MINOR: int = 1
 
+# Optional boost when a prior inbound payment email cites the same invoice/ref.
+# Capped low enough that evidence alone cannot clear REVIEW_MIN from a no-match.
+EMAIL_EVIDENCE_BOOST: float = 5.0
+
 # Upload limits
 MAX_UPLOAD_BYTES: int = 2 * 1024 * 1024
 MAX_CSV_ROWS: int = 5_000

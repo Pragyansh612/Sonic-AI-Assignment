@@ -25,6 +25,7 @@ RUNTIME_COLLECTIONS = (
     "audit_log",
     "email_outbox",
     "job_locks",
+    "payment_email_evidence",
 )
 
 

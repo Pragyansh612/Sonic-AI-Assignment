@@ -65,11 +65,15 @@ def match_credit(
     invoices: Sequence[OpenInvoice],
     customers: Sequence[CustomerInfo],
     use_embeddings: bool = False,
+    email_evidence: Sequence[dict] | None = None,
+    bank_reference: str | None = None,
 ) -> MatchResult:
     """Pure matching entrypoint for one credit row."""
     open_invs = open_invoices_only(invoices)
     known_numbers = [i.invoice_number for i in invoices]
     norm = normalize_narration(narration, known_invoice_numbers=known_numbers)
+    _email_evidence = list(email_evidence or [])
+    _bank_reference = bank_reference
     customer_map = {c.customer_id: c for c in customers}
 
     # Best payer match across all customers
@@ -141,6 +145,25 @@ def match_credit(
             ),
             alternatives=soft_alts,
         )
+
+    # Optional capped boost from prior payment emails — never creates candidates alone.
+    if _email_evidence:
+        from app.services.payment_email_evidence import evidence_for_transaction
+
+        for c in candidates:
+            hits = evidence_for_transaction(
+                narration=narration,
+                reference=_bank_reference,
+                invoice_numbers=list(c.invoice_numbers),
+                evidence_docs=_email_evidence,
+            )
+            if not hits:
+                continue
+            boost = cfg.EMAIL_EVIDENCE_BOOST
+            c.confidence = min(99.5, c.confidence + boost)
+            c.evidence.email_evidence = hits
+            c.evidence.components["email_evidence"] = boost
+            c.reason = f"{c.reason}; email evidence (+{boost:.0f})"
 
     candidates.sort(key=lambda c: c.confidence, reverse=True)
     top = candidates[0]

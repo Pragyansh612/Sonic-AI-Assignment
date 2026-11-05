@@ -85,6 +85,7 @@ class Evidence:
     currency_ok: bool = True
     hard_reject_reason: str = ""
     components: dict[str, float] = field(default_factory=dict)
+    email_evidence: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -99,6 +100,7 @@ class Evidence:
             "currency_ok": self.currency_ok,
             "hard_reject_reason": self.hard_reject_reason,
             "components": self.components,
+            "email_evidence": self.email_evidence,
         }
 
 

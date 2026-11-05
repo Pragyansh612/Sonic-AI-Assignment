@@ -215,6 +215,16 @@ export default function ReconciliationPage() {
                         {txn.possible_duplicate ? (
                           <Badge tone="amber">duplicate?</Badge>
                         ) : null}
+                        {Array.isArray(txn.payment_email_evidence) &&
+                        txn.payment_email_evidence.length > 0 ? (
+                          <Badge tone="amber">
+                            email claim:{" "}
+                            {String(
+                              (txn.payment_email_evidence[0] as { excerpt?: string })
+                                .excerpt || "linked",
+                            ).slice(0, 48)}
+                          </Badge>
+                        ) : null}
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-xs whitespace-nowrap">
                         {debit ? "DR " : "CR "}
