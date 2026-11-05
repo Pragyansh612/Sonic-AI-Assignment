@@ -40,6 +40,7 @@ class SendEdited(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     draft: str | None = Field(default=None, max_length=20_000)
+    acknowledge_warnings: bool = False
 
 
 def _smtp(db: DbDep) -> SmtpMailer:
@@ -122,7 +123,9 @@ async def send_needs_attention(
     conversation_id: str, payload: SendEdited, db: DbDep
 ) -> dict[str, Any]:
     return await NeedsAttentionService(db, _smtp(db)).send_edited(
-        conversation_id, draft=payload.draft
+        conversation_id,
+        draft=payload.draft,
+        acknowledge_warnings=payload.acknowledge_warnings,
     )
 
 

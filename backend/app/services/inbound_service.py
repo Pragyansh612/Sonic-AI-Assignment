@@ -645,7 +645,11 @@ class NeedsAttentionService:
         return updated
 
     async def send_edited(
-        self, conversation_id: str, *, draft: str | None = None
+        self,
+        conversation_id: str,
+        *,
+        draft: str | None = None,
+        acknowledge_warnings: bool = False,
     ) -> dict[str, Any]:
         from fastapi import HTTPException
 
@@ -680,7 +684,16 @@ class NeedsAttentionService:
             all_invoice_numbers=[i["invoice_number"] for i in all_invoices],
             strict=False,
         )
-        # Human override: warn but still send
+        # A human may override the validator, but only knowingly.
+        if validation.reasons and not acknowledge_warnings:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "code": "validation_warnings",
+                    "message": "Draft failed validation; resend with acknowledge_warnings=true to override.",
+                    "warnings": validation.reasons,
+                },
+            )
         out_id = f"<{uuid.uuid4().hex}@acmecorp.local>"
         subject = conv.get("subject") or "Accounts reply"
         token = conversation_id if conversation_id.startswith("AC-") else f"AC-{conversation_id}"
