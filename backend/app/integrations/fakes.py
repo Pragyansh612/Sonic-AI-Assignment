@@ -33,18 +33,26 @@ class FakeLlm:
         self,
         responses: list[dict[str, Any]] | None = None,
         *,
+        raw_responses: list[str] | None = None,
         error: Exception | None = None,
     ) -> None:
         self.responses = list(responses or [])
+        self.raw_responses = list(raw_responses or [])
         self.error = error
         self.calls: list[dict[str, str]] = []
 
     async def complete_json(
         self, *, system: str, user: str, schema_hint: dict[str, Any]
     ) -> dict[str, Any]:
+        from app.integrations.llm_client import parse_llm_json_content
+
         self.calls.append({"system": system, "user": user})
         if self.error:
             raise self.error
+        if self.raw_responses:
+            return parse_llm_json_content(
+                self.raw_responses.pop(0), schema_hint=schema_hint
+            )
         if not self.responses:
             raise RuntimeError("FakeLlm has no responses left")
         return self.responses.pop(0)

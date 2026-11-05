@@ -11,11 +11,7 @@ from typing import Any
 
 from app.config import Settings, get_settings
 from app.integrations.protocols import InboundEmail
-
-_QUOTE_RE = re.compile(
-    r"(?:^|\n)(?:On .* wrote:|-- \n|________|From: .*\nSent:)",
-    re.IGNORECASE,
-)
+from app.services.email_sanitize import strip_quoted_reply
 
 
 class ImapMailer:
@@ -75,7 +71,7 @@ class ImapMailer:
         in_reply_to = (msg.get("In-Reply-To") or "").strip() or None
         references = _split_refs(msg.get("References", ""))
         body = _extract_text(msg)
-        body = _strip_quoted(body)
+        body = strip_quoted_reply(body)
         body = body[: get_settings().max_email_body_chars]
         return InboundEmail(
             message_id=message_id,
@@ -137,14 +133,3 @@ def _extract_text(msg: Message) -> str:
     except Exception:
         return str(msg.get_payload() or "")
 
-
-def _strip_quoted(body: str) -> str:
-    m = _QUOTE_RE.search(body)
-    if m:
-        body = body[: m.start()]
-    lines = []
-    for line in body.splitlines():
-        if line.startswith(">"):
-            continue
-        lines.append(line)
-    return "\n".join(lines).strip()

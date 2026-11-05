@@ -22,6 +22,7 @@ from app.repositories.collections import CollectionsRepository
 from app.repositories.customer import CustomerRepository
 from app.repositories.invoice import InvoiceRepository
 from app.repositories.organization import OrganizationRepository
+from app.services.email_sanitize import strip_quoted_reply
 from app.services.email_templates import compose_customer_reply
 from app.services.reply_validator import validate_reply_draft
 from app.services.safety_keywords import is_auto_reply_or_bounce, scan_body_for_policy_hits
@@ -77,6 +78,23 @@ class InboundService:
     async def process_message(self, msg: InboundEmail) -> dict[str, Any]:
         if await self.repo.message_exists(msg.message_id):
             return {"message_id": msg.message_id, "status": "duplicate"}
+
+        # Strip quoted history before any safety scan or LLM call so our own
+        # reminder text in a reply thread cannot re-trigger policy keywords.
+        cleaned_body = strip_quoted_reply(msg.body_text)[
+            : self.settings.max_email_body_chars
+        ]
+        msg = InboundEmail(
+            message_id=msg.message_id,
+            from_address=msg.from_address,
+            to_address=msg.to_address,
+            subject=msg.subject,
+            body_text=cleaned_body,
+            in_reply_to=msg.in_reply_to,
+            references=msg.references,
+            headers=msg.headers,
+            uid=msg.uid,
+        )
 
         is_auto, auto_kind = is_auto_reply_or_bounce(
             subject=msg.subject,

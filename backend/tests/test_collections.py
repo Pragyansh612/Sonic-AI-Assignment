@@ -503,3 +503,245 @@ def test_validator_rejects_wrong_amount() -> None:
         strict=True,
     )
     assert bad.ok is False
+
+
+def test_strip_quoted_removes_gmail_and_outlook_forms() -> None:
+    from app.services.email_sanitize import strip_quoted_reply
+
+    gmail = (
+        "Thanks, we will pay next week.\n\n"
+        "On Mon, 3 Nov 2026 at 10:00 AcmeCorp Accounts Team "
+        "<accounts@acme.com> wrote:\n"
+        "> Dear Arjun,\n"
+        "> This is a reminder that the following invoice(s) are overdue:\n"
+        "> - INV-1004\n"
+        "> Please dispute nothing; sue is a legal word that must not leak.\n"
+        "> Brightline Logistics INV-1002 should not flag either.\n"
+    )
+    cleaned = strip_quoted_reply(gmail)
+    assert "Thanks, we will pay next week." in cleaned
+    assert "dispute" not in cleaned.lower()
+    assert "sue" not in cleaned.lower()
+    assert "Brightline" not in cleaned
+    assert "INV-1004" not in cleaned
+
+    outlook = (
+        "Got it.\n"
+        "-----Original Message-----\n"
+        "From: Accounts\n"
+        "Sent: Monday\n"
+        "extension and waive please\n"
+    )
+    assert "extension" not in strip_quoted_reply(outlook).lower()
+    assert "Got it." in strip_quoted_reply(outlook)
+
+    gt = "Reply text\n> quoted dispute line\n> another\n"
+    assert "dispute" not in strip_quoted_reply(gt).lower()
+
+
+@pytest.mark.asyncio
+async def test_quoted_reminder_history_does_not_trigger_policy(db) -> None:
+    """Our reminder text in a quoted reply must not flag legal/other-company."""
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    settings = get_settings()
+    await db.customers.update_one(
+        {"customer_id": "C002"},
+        {"$set": {"contact_email": "arjun@test.example"}},
+    )
+    smtp = FakeSmtp()
+    llm = FakeLlm(
+        [
+            {
+                "intent": "promises_payment",
+                "confidence": 0.9,
+                "needs_human": False,
+                "reason": "will pay",
+                "referenced_invoices": [],
+                "prose_reply": "Thank you, we noted your message.",
+            }
+        ]
+    )
+    body = (
+        "We will pay by Friday.\n\n"
+        "On Tue, Nov 4, 2026 at 9:00 AM AcmeCorp Accounts Team wrote:\n"
+        "> Dear Arjun Nair,\n"
+        "> This is a reminder that the following invoice(s) are overdue:\n"
+        "> - INV-1004: ₹59,000.00 due 2026-09-19\n"
+        "> Please contact legal / lawyer if you dispute or want to sue, "
+        "or mention Brightline Logistics INV-1002 by mistake.\n"
+        "> extension / more time / waive — should stay in quote only.\n"
+    )
+    imap = FakeImap(
+        [
+            InboundEmail(
+                message_id="<quote@test>",
+                from_address="arjun@test.example",
+                to_address="accounts@test",
+                subject="Re: Payment reminder [AC-testtoken1]",
+                body_text=body,
+                in_reply_to=None,
+                references=[],
+                headers={},
+                uid="q1",
+            )
+        ]
+    )
+    # Pre-create conversation matching subject token
+    await db.conversations.insert_one(
+        {
+            "conversation_id": "AC-testtoken1",
+            "customer_id": "C002",
+            "kind": "customer",
+            "status": "open",
+            "subject": "Payment reminder [AC-testtoken1]",
+            "created_at": "2026-11-01T00:00:00+00:00",
+            "updated_at": "2026-11-01T00:00:00+00:00",
+            "badges": [],
+        }
+    )
+    r = await InboundService(db, imap=imap, smtp=smtp, llm=llm, settings=settings).check_inbox()
+    assert r["processed"][0]["status"] == "auto_answered"
+    assert smtp.sent
+    # LLM must only see cleaned body
+    assert "Brightline" not in llm.calls[0]["user"]
+    assert "dispute" not in llm.calls[0]["user"].lower()
+    assert "We will pay by Friday." in llm.calls[0]["user"]
+
+
+@pytest.mark.asyncio
+async def test_threading_via_ac_token_then_sender_email(db) -> None:
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    settings = get_settings()
+    await db.customers.update_one(
+        {"customer_id": "C002"},
+        {"$set": {"contact_email": "arjun@test.example"}},
+    )
+    conv_id = "AC-thread99"
+    await db.conversations.insert_one(
+        {
+            "conversation_id": conv_id,
+            "customer_id": "C002",
+            "kind": "customer",
+            "status": "open",
+            "subject": f"Payment reminder [{conv_id}]",
+            "created_at": "2026-11-01T00:00:00+00:00",
+            "updated_at": "2026-11-01T00:00:00+00:00",
+            "badges": [],
+        }
+    )
+    smtp = FakeSmtp()
+    llm = FakeLlm(
+        [
+            {
+                "intent": "balance_query",
+                "confidence": 0.95,
+                "needs_human": False,
+                "reason": "balance",
+                "referenced_invoices": [],
+                "prose_reply": "Here is your balance.",
+            },
+            {
+                "intent": "balance_query",
+                "confidence": 0.95,
+                "needs_human": False,
+                "reason": "balance",
+                "referenced_invoices": [],
+                "prose_reply": "Here is your balance again.",
+            },
+        ]
+    )
+    # 1) Missing/rewritten In-Reply-To — attach via [AC-...] subject token
+    msg1 = InboundEmail(
+        message_id="<tok@test>",
+        from_address="arjun@test.example",
+        to_address="accounts@test",
+        subject=f"Re: Payment reminder [{conv_id}]",
+        body_text="What do we still owe?",
+        in_reply_to="<rewritten-missing@elsewhere>",
+        references=[],
+        headers={},
+        uid="t1",
+    )
+    r1 = await InboundService(
+        db, imap=FakeImap([msg1]), smtp=smtp, llm=llm, settings=settings
+    ).check_inbox()
+    assert r1["processed"][0]["status"] == "auto_answered"
+    assert r1["processed"][0]["conversation_id"] == conv_id
+    stored = await db.messages.find_one({"message_id": "<tok@test>"})
+    assert stored["conversation_id"] == conv_id
+
+    # 2) No In-Reply-To and no token — fall back to sender email → same customer conv
+    msg2 = InboundEmail(
+        message_id="<sender@test>",
+        from_address="arjun@test.example",
+        to_address="accounts@test",
+        subject="Balance follow-up",
+        body_text="Any update on outstanding?",
+        in_reply_to=None,
+        references=[],
+        headers={},
+        uid="t2",
+    )
+    r2 = await InboundService(
+        db, imap=FakeImap([msg2]), smtp=smtp, llm=llm, settings=settings
+    ).check_inbox()
+    assert r2["processed"][0]["conversation_id"] == conv_id
+
+
+@pytest.mark.asyncio
+async def test_llm_fenced_json_and_prose_ok_garbage_needs_attention(db) -> None:
+    from app.config import get_settings
+    from app.integrations.llm_client import parse_llm_json_content, LlmError
+
+    get_settings.cache_clear()
+    settings = get_settings()
+    await db.customers.update_one(
+        {"customer_id": "C002"},
+        {"$set": {"contact_email": "arjun@test.example"}},
+    )
+
+    fenced = """```json
+{"intent":"balance_query","confidence":0.91,"needs_human":false,
+ "reason":"asks balance","referenced_invoices":["INV-1004"],
+ "prose_reply":"Happy to help."}
+```"""
+    parsed = parse_llm_json_content(fenced)
+    assert parsed["intent"] == "balance_query"
+
+    prose = (
+        "Sure, here you go:\n"
+        '{"intent":"payment_details","confidence":0.88,"needs_human":false,'
+        '"reason":"bank","referenced_invoices":[],"prose_reply":"Details below."}\n'
+        "Hope that helps!"
+    )
+    assert parse_llm_json_content(prose)["intent"] == "payment_details"
+
+    with pytest.raises(LlmError):
+        parse_llm_json_content("this is not json at all {{{")
+
+    smtp = FakeSmtp()
+    llm = FakeLlm(raw_responses=["NOT JSON <<<garbage>>>"])
+    imap = FakeImap(
+        [
+            InboundEmail(
+                message_id="<garbage-llm@test>",
+                from_address="arjun@test.example",
+                to_address="accounts@test",
+                subject="hi",
+                body_text="balance please?",
+                in_reply_to=None,
+                references=[],
+                headers={},
+                uid="g1",
+            )
+        ]
+    )
+    r = await InboundService(
+        db, imap=imap, smtp=smtp, llm=llm, settings=settings
+    ).check_inbox()
+    assert r["processed"][0]["status"] == "needs_attention"
+    assert smtp.sent == []
