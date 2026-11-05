@@ -43,6 +43,27 @@ LLM_SCHEMA = {
 }
 
 
+SAFE_PROSE = "Thank you for your email. We have received it and will follow up shortly."
+
+
+def safe_draft_template(
+    *,
+    customer: dict[str, Any],
+    invoices: list[dict[str, Any]],
+    org: dict[str, Any],
+    include_facts: bool,
+) -> str:
+    """Greeting + facts rendered from the DB; used when the AI draft was rejected."""
+    return compose_customer_reply(
+        contact_name=customer["contact_name"],
+        prose=SAFE_PROSE,
+        invoices=invoices if include_facts else [],
+        org=org,
+        include_invoices=include_facts,
+        include_payment_details=include_facts,
+    )
+
+
 class InboundService:
     def __init__(
         self,
@@ -140,7 +161,9 @@ class InboundService:
             headers=msg.headers,
         )
         customer = await self._customer_by_email(msg.from_address)
-        conversation, thread_mismatch = await self._resolve_conversation(msg, customer)
+        conversation, thread_mismatch = await self._resolve_conversation(
+            msg, customer, auto_kind=auto_kind if is_auto else None
+        )
 
         now = utc_now().isoformat()
         await self.repo.insert_message(
@@ -303,6 +326,26 @@ class InboundService:
                     include_payment_details=intent
                     in {"balance_query", "payment_details"},
                 )
+            rejected_draft = None
+            rejected_reasons: list[str] = []
+            if draft:
+                check = validate_reply_draft(
+                    draft,
+                    customer=customer,
+                    context_invoices=context_invoices,
+                    org=org,
+                    all_customers=all_customers,
+                    all_invoice_numbers=[i["invoice_number"] for i in all_invoices],
+                    strict=True,
+                )
+                if not check.ok:
+                    rejected_draft, rejected_reasons = draft, check.reasons
+                    draft = safe_draft_template(
+                        customer=customer,
+                        invoices=context_invoices,
+                        org=org,
+                        include_facts=intent in {"balance_query", "payment_details"},
+                    )
             reason = (llm_result or {}).get("reason") or intent
             if policy_hits:
                 reason = f"policy:{','.join(policy_hits)}; {reason}"
@@ -316,6 +359,8 @@ class InboundService:
                 draft=draft,
                 inbound=msg,
                 escalation=sorted({intent, *policy_hits}),
+                rejected_draft=rejected_draft,
+                rejected_reasons=rejected_reasons,
             )
             if intent in {"claims_paid", "promises_payment"}:
                 await self.repo.update_conversation(
@@ -381,8 +426,13 @@ class InboundService:
             await self._flag_needs_attention(
                 conversation,
                 reason="validator: " + "; ".join(validation.reasons),
-                draft=draft,
+                draft=safe_draft_template(
+                    customer=customer, invoices=context_invoices, org=org,
+                    include_facts=include_facts,
+                ),
                 inbound=msg,
+                rejected_draft=draft,
+                rejected_reasons=validation.reasons,
             )
             return {
                 "message_id": msg.message_id,
@@ -496,7 +546,10 @@ class InboundService:
         return None
 
     async def _resolve_conversation(
-        self, msg: InboundEmail, customer: dict[str, Any] | None
+        self,
+        msg: InboundEmail,
+        customer: dict[str, Any] | None,
+        auto_kind: str | None = None,
     ) -> tuple[dict[str, Any], bool]:
         """Return (conversation, thread_mismatch).
 
@@ -570,13 +623,15 @@ class InboundService:
             "conversation_id": conversation_id,
             "customer_id": None,
             "kind": "unknown",
-            "status": "needs_attention",
+            # Bounces / out-of-office replies are logged, never queued for a human.
+            "status": "open" if auto_kind else "needs_attention",
             "subject": msg.subject,
             "created_at": now,
             "updated_at": now,
-            "badges": ["unknown_sender"],
-            "needs_attention_reason": "Unknown sender",
+            "badges": ["unknown_sender", *([auto_kind] if auto_kind else [])],
         }
+        if not auto_kind:
+            doc["needs_attention_reason"] = "Unknown sender"
         await self.repo.upsert_conversation(doc)
         return doc, mismatch
 
@@ -588,6 +643,8 @@ class InboundService:
         draft: str | None,
         inbound: InboundEmail,
         escalation: list[str] | None = None,
+        rejected_draft: str | None = None,
+        rejected_reasons: list[str] | None = None,
     ) -> None:
         now = utc_now().isoformat()
         badges = list(
@@ -602,6 +659,8 @@ class InboundService:
             badges=badges,
             last_inbound_message_id=inbound.message_id,
             escalation=escalation or [],
+            rejected_ai_draft=rejected_draft,
+            rejected_reasons=rejected_reasons or [],
         )
 
 

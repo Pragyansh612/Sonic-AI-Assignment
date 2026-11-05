@@ -570,3 +570,99 @@ async def test_extension_request_does_not_stop_reminders(db):
     )
     res = await ReminderService(db, FakeSmtp(), get_settings()).send_reminders()
     assert any(s["customer_id"] == "C002" for s in res["sent"])
+
+
+# ------------------------------------------------------------ follow-up 1: payment reference extraction
+
+
+@pytest.mark.parametrize(
+    "body,refs",
+    [
+        ("We paid INV-1004 yesterday, reference N123456789", ["N123456789"]),
+        ("paid, ref: N123456789", ["N123456789"]),
+        ("Paid via NEFT UTR 12345 today", ["12345"]),
+        ("UTR-AB12CD34", ["AB12CD34"]),
+        ("Reference no. 9988776655", ["9988776655"]),
+        ("We have your reference and will pay", []),
+        ("NEFT payment done for INV-1004", []),
+    ],
+)
+def test_payment_reference_extraction(body, refs):
+    from app.services.payment_email_evidence import extract_payment_claims
+
+    assert extract_payment_claims(body)["references"] == refs
+
+
+async def test_claim_email_stores_the_real_reference(db):
+    await run_inbox(
+        db,
+        [mail("<r1>", "arjun@t.example", "Payment", "We paid INV-1004 yesterday, reference N123456789", "1")],
+        [llm_json("claims_paid", prose="Thank you, we will verify.")],
+    )
+    ev = await db.payment_email_evidence.find_one({}, {"_id": 0})
+    assert ev["references"] == ["N123456789"] and ev["invoice_numbers"] == ["INV-1004"]
+
+
+# ------------------------------------------------------------ follow-up 2: bounces never queue for a human
+
+
+async def test_bounce_and_autoreply_conversations_are_open_not_needs_attention(db):
+    msgs = [
+        mail("<b1>", "MAILER-DAEMON@googlemail.com", "Delivery Status Notification (Failure)", "x", "1",
+             headers={"Content-Type": "multipart/report; report-type=delivery-status"}),
+        mail("<b2>", "stranger@x.example", "Out of Office", "away", "2", headers={"Auto-Submitted": "auto-replied"}),
+        mail("<b3>", "arjun@t.example", "Automatic reply: hi", "away", "3", headers={"Auto-Submitted": "auto-replied"}),
+    ]
+    r, smtp = await run_inbox(db, msgs, [])
+    assert [p["status"] for p in r["processed"]] == ["bounce", "auto_reply", "auto_reply"]
+    assert smtp.sent == []
+    assert await db.conversations.count_documents({"status": "needs_attention"}) == 0
+    convs = await db.conversations.find({}, {"_id": 0}).to_list(None)
+    badges = {b for c in convs for b in c["badges"]}
+    assert {"bounce", "auto_reply"} <= badges
+
+
+# ------------------------------------------------------------ follow-up 3: rejected drafts are not prefilled
+
+
+async def test_validator_failure_prefills_safe_template_and_keeps_rejected_text(client, db, admin_headers):
+    bad = "Redwood Clinics owes INV-1016 for ₹59,000.00; pay to account 998877665544."
+    r, smtp = await run_inbox(
+        db, [mail("<s1>", "arjun@t.example", "Hi", "balance?", "1")],
+        [llm_json("balance_query", prose=bad)],
+    )
+    assert r["processed"][0]["reason"] == "validator_failed" and smtp.sent == []
+    items = (await client.get("/api/v1/collections/needs-attention", headers=admin_headers)).json()
+    item = items[0]
+    for leaked in ("Redwood", "INV-1016", "998877665544"):
+        assert leaked not in item["ai_draft"]
+    assert "INV-1004" in item["ai_draft"] and "₹1,18,000.00" in item["ai_draft"]
+    assert "000111222333" in item["ai_draft"]
+    assert "998877665544" in item["rejected_ai_draft"]
+    assert item["rejected_reasons"]
+    # the safe template validates, so a human can send it without an override
+    sent = await client.post(
+        f"/api/v1/collections/needs-attention/{item['conversation_id']}/send",
+        json={}, headers=admin_headers,
+    )
+    assert sent.status_code == 200, sent.text
+
+
+async def test_failed_human_review_draft_is_also_replaced(client, db, admin_headers):
+    r, _ = await run_inbox(
+        db, [mail("<s2>", "arjun@t.example", "Hi", "we dispute INV-1004", "1")],
+        [llm_json("dispute", needs=True, prose="Sorry. Redwood Clinics paid INV-1016 instead.")],
+    )
+    item = (await client.get("/api/v1/collections/needs-attention", headers=admin_headers)).json()[0]
+    assert "Redwood" not in (item["ai_draft"] or "")
+    assert "Redwood" in item["rejected_ai_draft"]
+
+
+async def test_clean_draft_has_no_rejected_fields(client, db, admin_headers):
+    await run_inbox(
+        db, [mail("<s3>", "arjun@t.example", "Hi", "we dispute INV-1004", "1")],
+        [llm_json("dispute", needs=True, prose="Sorry to hear that; our team will review it.")],
+    )
+    item = (await client.get("/api/v1/collections/needs-attention", headers=admin_headers)).json()[0]
+    assert "our team will review" in item["ai_draft"]
+    assert not item.get("rejected_ai_draft") and not item.get("rejected_reasons")
