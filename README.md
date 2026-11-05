@@ -1,6 +1,6 @@
 # AcmeCorp Accounts (Sonic AI Intern Assignment)
 
-Collections agent + bank reconciliation take-home. **Phase 1–2 complete** (base API + Part A UI). Parts B/C follow later.
+Collections agent + bank reconciliation take-home. **Phases 1–3 complete** (base app + Part C reconciliation). Part B follows later.
 
 ## Ports & CORS
 
@@ -35,7 +35,7 @@ cp frontend/.env.example frontend/.env.local
 **Security notes**
 
 - Never use `NEXT_PUBLIC_` for `ADMIN_TOKEN` or `BACKEND_URL`.
-- If `ENV=production` and `ADMIN_API_TOKEN` is a default/placeholder (or &lt; 16 chars), the backend **refuses to start**.
+- If `ENV=production` and `ADMIN_API_TOKEN` is a default/placeholder (or < 16 chars), the backend **refuses to start**.
 
 ### 2. MongoDB
 
@@ -71,10 +71,10 @@ Open http://localhost:3000
 ```bash
 cd backend
 source .venv/bin/activate
-pytest -v
+pytest -v -s   # -s prints the matching evaluation table
 ```
 
-## Env var table (current)
+## Env var table
 
 | Variable | Where | Purpose |
 |----------|-------|---------|
@@ -84,26 +84,95 @@ pytest -v
 | `ADMIN_API_TOKEN` | backend | Required on mutating routes (`X-Admin-Token`) |
 | `FRONTEND_ORIGIN` | backend | CORS allowlist (exact origin) |
 | `DEMO_TODAY` | backend | Optional `YYYY-MM-DD` clock override |
+| `ENABLE_EMBEDDINGS` | backend | Optional MiniLM name similarity (default off) |
+| `ENABLE_LLM_MATCH_ASSIST` | backend | Optional LLM for ambiguous leftovers (default off) |
 | `BACKEND_URL` | frontend `.env.local` (server-only) | FastAPI base URL for proxy |
 | `ADMIN_TOKEN` | frontend `.env.local` (server-only) | Injected as `X-Admin-Token` by proxy |
 
-SMTP/IMAP/LLM vars are reserved for Part B (see root `.env.example`).
+SMTP/IMAP/LLM email vars are reserved for Part B (see root `.env.example`).
 
-## Part A pages
+## Reconciliation API examples
 
-- **Organization** — contacts, bank, policies, payment terms
-- **Customers** — table + inline email edit (validated client + server)
-- **Invoices** — status / OVERDUE badges, filters, detail drawer; amounts use API `formatted` strings
-- **Collections / Reconciliation** — placeholder routes
-- Header: today from `/health`, demo-date tag, confirm-gated **Reset demo data**
+All mutating routes require header `X-Admin-Token: <ADMIN_API_TOKEN>`.
 
-## Architecture (so far)
+### Upload
+
+```bash
+curl -s -X POST http://localhost:8000/api/v1/reconciliation/upload \
+  -H "X-Admin-Token: $ADMIN_API_TOKEN" \
+  -F "file=@data/bank_statement_sample.csv"
+```
+
+Response:
+
+```json
+{
+  "statement_id": "stmt_…",
+  "filename": "bank_statement_sample.csv",
+  "row_count": 14,
+  "error_count": 0,
+  "parse_errors": [],
+  "suggestion_count": 12
+}
+```
+
+### Statement detail
+
+```bash
+curl -s http://localhost:8000/api/v1/reconciliation/statements/{id} \
+  -H "X-Admin-Token: $ADMIN_API_TOKEN"
+```
+
+Returns statement metadata, `parse_errors`, `transactions[]` (each with nested `suggestion`), and `suggestions[]`.
+
+### Approve / reject / choose
+
+```bash
+# Exact / multi payment
+curl -s -X POST http://localhost:8000/api/v1/reconciliation/suggestions/{id}/approve \
+  -H "X-Admin-Token: $ADMIN_API_TOKEN" -H "Content-Type: application/json" \
+  -d '{}'
+
+# Partial: leave open or close with TDS (INR, shortfall == 10% of subtotal)
+curl -s -X POST …/approve -H "…" -d '{"tds_mode":"leave_open"}'
+curl -s -X POST …/approve -H "…" -d '{"tds_mode":"close_tds"}'
+
+curl -s -X POST …/reject -H "X-Admin-Token: $ADMIN_API_TOKEN" -d '{}'
+
+curl -s -X POST …/choose -H "…" -d '{"invoice_numbers":["INV-1002"]}'
+# Choose only updates the suggestion; Approve still required to apply.
+```
+
+Second approve of the same suggestion or the same bank transaction → **409**.
+
+### Open invoices (dropdown)
+
+```bash
+curl -s http://localhost:8000/api/v1/invoices/open -H "X-Admin-Token: $ADMIN_API_TOKEN"
+```
+
+## Matching design (summary)
+
+Local fuzzy pipeline (no statement → LLM). Weights/thresholds live in `backend/app/services/matching/config.py`.
+
+1. Normalize narration → payer candidate + invoice hints  
+2. Alias generation (legal-suffix strip, abbreviations, contact initials)  
+3. Similarity: token_set_ratio + Jaro-Winkler + char n-gram TF-IDF cosine  
+4. Candidates: open invoices only; multi-invoice subset-sum (same customer/currency)  
+5. Hard gates: unknown payer + no invoice # → none; amount-alone → none; wrong currency → none; payment before invoice_date → reject; confidence &lt; 60 → none  
+6. Overpayment never auto-suggested (Choose + Approve can still be used carefully; approve rejects overpay)
+
+TDS: **10% of invoice subtotal**, **INR only**.
+
+## Architecture
 
 ```mermaid
 flowchart LR
   Browser --> NextProxy["Next.js /api/proxy"]
   NextProxy -->|"X-Admin-Token"| FastAPI
+  FastAPI --> Match["matching engine"]
   FastAPI --> MongoDB
+  CSV[Bank CSV] --> FastAPI
 ```
 
 ## Status
@@ -112,6 +181,6 @@ flowchart LR
 |------|--------|
 | Part A API + seed/reset | Done |
 | Part A frontend | Done |
-| Part C reconciliation | Not started |
+| Part C matching + API + review UI | Done |
 | Part B collections agent | Not started |
-| Full README / explanation.pdf / video | Later phase |
+| explanation.pdf / video | Later phase |

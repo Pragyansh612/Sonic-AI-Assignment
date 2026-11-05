@@ -19,8 +19,19 @@ const ALLOWLIST: Rule[] = [
   { methods: new Set(["GET"]), pattern: /^customers$/ },
   { methods: new Set(["GET", "PATCH"]), pattern: /^customers\/[^/]+$/ },
   { methods: new Set(["GET"]), pattern: /^invoices$/ },
+  { methods: new Set(["GET"]), pattern: /^invoices\/open$/ },
   { methods: new Set(["GET"]), pattern: /^invoices\/[^/]+$/ },
   { methods: new Set(["POST"]), pattern: /^admin\/reset$/ },
+  { methods: new Set(["POST"]), pattern: /^reconciliation\/upload$/ },
+  { methods: new Set(["GET"]), pattern: /^reconciliation\/statements$/ },
+  {
+    methods: new Set(["GET"]),
+    pattern: /^reconciliation\/statements\/[^/]+$/,
+  },
+  {
+    methods: new Set(["POST"]),
+    pattern: /^reconciliation\/suggestions\/[^/]+\/(approve|reject|choose)$/,
+  },
 ];
 
 function isAllowed(method: string, apiPath: string): boolean {
@@ -92,9 +103,14 @@ async function forward(
   };
 
   if (method !== "GET" && method !== "HEAD") {
-    const body = await request.text();
-    if (body) {
-      init.body = body;
+    // Preserve multipart boundaries for CSV upload
+    if (contentType?.includes("multipart/form-data")) {
+      init.body = await request.arrayBuffer();
+    } else {
+      const body = await request.text();
+      if (body) {
+        init.body = body;
+      }
     }
   }
 

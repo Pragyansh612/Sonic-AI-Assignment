@@ -7,8 +7,12 @@ import type {
   Customer,
   Health,
   Invoice,
+  OpenInvoiceOption,
   Organization,
   ResetResponse,
+  StatementDetail,
+  StatementSummary,
+  UploadResult,
 } from "@/lib/types";
 
 export class ApiError extends Error {
@@ -20,6 +24,21 @@ export class ApiError extends Error {
     this.status = status;
     this.details = details;
   }
+}
+
+function formatDetail(data: unknown, status: number): string {
+  if (typeof data === "object" && data !== null && "detail" in data) {
+    const detail = (data as { detail: unknown }).detail;
+    if (typeof detail === "string") return detail;
+    if (typeof detail === "object" && detail !== null) {
+      try {
+        return JSON.stringify(detail);
+      } catch {
+        return `Request failed (${status})`;
+      }
+    }
+  }
+  return `Request failed (${status})`;
 }
 
 async function proxy<T>(
@@ -36,13 +55,19 @@ async function proxy<T>(
 
   const { query: _ignoredQuery, ...rest } = init ?? {};
   void _ignoredQuery;
+
+  const headers: HeadersInit = {
+    Accept: "application/json",
+    ...rest.headers,
+  };
+  // Let the browser set multipart boundary; only set JSON content-type for strings.
+  if (rest.body && typeof rest.body === "string") {
+    (headers as Record<string, string>)["Content-Type"] = "application/json";
+  }
+
   const response = await fetch(url.pathname + url.search, {
     ...rest,
-    headers: {
-      Accept: "application/json",
-      ...(rest.body ? { "Content-Type": "application/json" } : {}),
-      ...rest.headers,
-    },
+    headers,
     cache: "no-store",
   });
 
@@ -57,14 +82,7 @@ async function proxy<T>(
   }
 
   if (!response.ok) {
-    const detail =
-      typeof data === "object" &&
-      data !== null &&
-      "detail" in data &&
-      (data as { detail: unknown }).detail !== undefined
-        ? String((data as { detail: unknown }).detail)
-        : `Request failed (${response.status})`;
-    throw new ApiError(response.status, detail, data);
+    throw new ApiError(response.status, formatDetail(data, response.status), data);
   }
 
   return data as T;
@@ -94,9 +112,47 @@ export const api = {
     }),
   invoice: (invoiceNumber: string) =>
     proxy<Invoice>(`invoices/${encodeURIComponent(invoiceNumber)}`),
+  openInvoices: () => proxy<OpenInvoiceOption[]>("invoices/open"),
   resetDemo: () =>
     proxy<ResetResponse>("admin/reset", {
       method: "POST",
       body: JSON.stringify({ confirm: "RESET" }),
     }),
+  uploadStatement: (file: File) => {
+    const form = new FormData();
+    form.append("file", file);
+    return proxy<UploadResult>("reconciliation/upload", {
+      method: "POST",
+      body: form,
+    });
+  },
+  listStatements: () => proxy<StatementSummary[]>("reconciliation/statements"),
+  getStatement: (id: string) =>
+    proxy<StatementDetail>(
+      `reconciliation/statements/${encodeURIComponent(id)}`,
+    ),
+  approveSuggestion: (
+    id: string,
+    body: {
+      invoice_numbers?: string[];
+      tds_mode?: "close_tds" | "leave_open";
+    } = {},
+  ) =>
+    proxy<Record<string, unknown>>(
+      `reconciliation/suggestions/${encodeURIComponent(id)}/approve`,
+      { method: "POST", body: JSON.stringify(body) },
+    ),
+  rejectSuggestion: (id: string) =>
+    proxy<Record<string, unknown>>(
+      `reconciliation/suggestions/${encodeURIComponent(id)}/reject`,
+      { method: "POST", body: "{}" },
+    ),
+  chooseSuggestion: (id: string, invoice_numbers: string[]) =>
+    proxy<Record<string, unknown>>(
+      `reconciliation/suggestions/${encodeURIComponent(id)}/choose`,
+      {
+        method: "POST",
+        body: JSON.stringify({ invoice_numbers }),
+      },
+    ),
 };

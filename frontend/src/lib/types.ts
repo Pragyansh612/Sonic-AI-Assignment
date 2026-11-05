@@ -84,3 +84,79 @@ export type ResetResponse = {
   message: string;
   counts: Record<string, number>;
 };
+
+export type ParseError = {
+  row_number: number;
+  field: string | null;
+  message: string;
+};
+
+export type MatchSuggestion = {
+  suggestion_id: string;
+  statement_id: string;
+  transaction_id: string;
+  row_number: number;
+  suggestion_type: "single" | "multi" | "none";
+  invoice_numbers: string[];
+  confidence: number;
+  reason: string;
+  evidence: Record<string, unknown>;
+  alternatives: Array<Record<string, unknown>>;
+  band: "high" | "review" | "none";
+  status: string;
+  manual_choice?: boolean;
+  customer_mismatch?: boolean;
+  mismatch_warning?: string | null;
+};
+
+export type BankTransaction = {
+  transaction_id: string;
+  statement_id: string;
+  row_number: number;
+  txn_date: string;
+  narration: string;
+  reference: string;
+  credit_minor: number | null;
+  debit_minor: number | null;
+  currency: string;
+  is_credit: boolean;
+  is_debit: boolean;
+  possible_duplicate?: boolean;
+  status: string;
+  suggestion?: MatchSuggestion | null;
+};
+
+export type StatementSummary = {
+  statement_id: string;
+  filename: string;
+  uploaded_at: string;
+  row_count: number;
+  error_count: number;
+  parse_errors: ParseError[];
+};
+
+export type StatementDetail = StatementSummary & {
+  transactions: BankTransaction[];
+  suggestions: MatchSuggestion[];
+};
+
+export type UploadResult = {
+  statement_id: string;
+  filename: string;
+  row_count: number;
+  error_count: number;
+  parse_errors: ParseError[];
+  suggestion_count: number;
+};
+
+export type OpenInvoiceOption = {
+  invoice_number: string;
+  customer_id: string;
+  customer_name: string;
+  currency: string;
+  due_date: string;
+  outstanding: Money;
+  subtotal_minor: number;
+  total_minor: number;
+  tds_expected_payment_minor: number | null;
+};
