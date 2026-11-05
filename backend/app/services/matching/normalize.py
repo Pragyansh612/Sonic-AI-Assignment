@@ -85,13 +85,21 @@ _DATE_TOKEN_RE = re.compile(
     r"\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\s+\d{2,4})\b",
     re.IGNORECASE,
 )
+# Allow optional spaces/hyphens inside the digit run (INV 10-25 → 1025).
 _INV_STRONG_RE = re.compile(
-    r"\bINV[-\s]?(\d{3,6})\b",
+    r"\bINV[-\s]?((?:\d[-\s]?){2,6}\d)\b",
     re.IGNORECASE,
 )
-_INV_COMPACT_RE = re.compile(r"\bINV(\d{3,6})\b", re.IGNORECASE)
-_RE_REF_RE = re.compile(r"\b(?:RE|REF)[-\s]?(\d{3,6})\b", re.IGNORECASE)
+_INV_COMPACT_RE = re.compile(r"\bINV((?:\d[-\s]?){2,6}\d)\b", re.IGNORECASE)
+_RE_REF_RE = re.compile(
+    r"\b(?:RE|REF)[-\s]?((?:\d[-\s]?){2,6}\d)\b",
+    re.IGNORECASE,
+)
 _BARE_NUM_RE = re.compile(r"\b(\d{4,6})\b")
+
+
+def _digits_only(value: str) -> str:
+    return re.sub(r"\D", "", value or "")
 
 
 def normalize_narration(
@@ -165,6 +173,9 @@ def _extract_hints(
     seen: set[str] = set()
 
     def add(raw: str, suffix: str, strength: InvoiceHintStrength) -> None:
+        suffix = _digits_only(suffix)
+        if len(suffix) < 3 or len(suffix) > 6:
+            return
         canonical = suffix_map.get(suffix)
         if not canonical:
             # Strong INV tokens: still record even if not in open set —
@@ -191,7 +202,7 @@ def _extract_hints(
         # Skip if already part of a stronger match span — crude: skip if INV nearby
         start = max(0, m.start() - 4)
         window = upper[start : m.end()]
-        if "INV" in window:
+        if "INV" in window or re.search(r"\b(?:RE|REF)\b", window):
             continue
         add(m.group(0), m.group(1), InvoiceHintStrength.WEAK)
 
