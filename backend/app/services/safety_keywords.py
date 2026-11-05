@@ -92,22 +92,26 @@ def is_auto_reply_or_bounce(
     from_address: str,
     headers: dict[str, str],
 ) -> tuple[bool, str | None]:
-    auto_submitted = (headers.get("Auto-Submitted") or "").lower()
+    headers = {str(k).lower(): v for k, v in (headers or {}).items()}
+    auto_submitted = (headers.get("auto-submitted") or "").lower()
     if auto_submitted and auto_submitted != "no":
         return True, "auto_reply"
-    precedence = (headers.get("Precedence") or "").lower()
+    precedence = (headers.get("precedence") or "").lower()
     if precedence in {"bulk", "auto_reply", "list"}:
         return True, "auto_reply"
-    if (headers.get("X-Autoreply") or "").strip():
+    if (headers.get("x-autoreply") or "").strip():
         return True, "auto_reply"
-    ctype = (headers.get("Content-Type") or "").lower()
+    ctype = (headers.get("content-type") or "").lower()
     if "multipart/report" in ctype:
         return True, "bounce"
     sender = from_address.lower()
     if "mailer-daemon" in sender or sender.startswith("postmaster@"):
         return True, "bounce"
     subj = subject.lower()
-    if "out of office" in subj or "out-of-office" in subj:
+    if any(
+        marker in subj
+        for marker in ("out of office", "out-of-office", "automatic reply", "autoreply", "auto-reply")
+    ):
         return True, "auto_reply"
     if "undelivered" in subj or "delivery status notification" in subj:
         return True, "bounce"
