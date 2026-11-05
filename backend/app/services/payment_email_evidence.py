@@ -15,8 +15,12 @@ from motor.motor_asyncio import AsyncIOMotorDatabase
 from app.clock import utc_now
 
 INV_RE = re.compile(r"\bINV[-\s]?(\d{3,5})\b", re.IGNORECASE)
+# Keyword (whole word), optional "no."/"number"/"#", a separator, then a token
+# that must contain a digit ("reference N123456789", "ref: 12345", "UTR-AB12CD34").
 REF_RE = re.compile(
-    r"\b(?:UTR|NEFT|IMPS|RTGS|REF)[-:\s/]*([A-Z0-9]{4,})\b",
+    r"\b(?:UTR|NEFT|IMPS|RTGS|REF(?:ERENCE)?)\b\.?"
+    r"(?:\s*(?:no\.?|number|num|#))?"
+    r"\s*[-:/#]?\s*(?=[A-Z0-9]*\d)([A-Z0-9]{4,})\b",
     re.IGNORECASE,
 )
 PAID_INV_RE = re.compile(
