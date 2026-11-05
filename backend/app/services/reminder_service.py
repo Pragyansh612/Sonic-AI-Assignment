@@ -73,6 +73,16 @@ class ReminderService:
 
             conv = await self.repo.find_by_customer(customer_id)
             now = utc_now()
+            if (
+                conv
+                and conv.get("status") == "needs_attention"
+                and {"dispute", "legal"} & set(conv.get("escalation") or [])
+            ):
+                skipped.append(
+                    {"customer_id": customer_id, "reason": "dispute_or_legal"}
+                )
+                continue
+
             if conv and conv.get("last_reminder_at"):
                 last = datetime_from_iso(conv["last_reminder_at"])
                 if last and now - last < cooldown:

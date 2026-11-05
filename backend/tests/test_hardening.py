@@ -536,3 +536,37 @@ async def test_data_reads_require_admin_token(client, admin_headers, path):
 
 async def test_health_stays_public(client):
     assert (await client.get("/api/v1/health")).status_code == 200
+
+
+# ------------------------------------------------------------ minor: no chasing during dispute/legal
+
+
+@pytest.mark.parametrize(
+    "body,intent",
+    [("We dispute this invoice, the amount is incorrect.", "dispute"),
+     ("Our lawyer will contact you.", "legal")],
+)
+async def test_reminders_skip_customers_in_dispute_or_legal(db, body, intent):
+    from app.services.reminder_service import ReminderService
+
+    await run_inbox(
+        db, [mail("<d1>", "arjun@t.example", "Hi", body, "1")],
+        [llm_json(intent, needs=True)],
+    )
+    smtp = FakeSmtp()
+    res = await ReminderService(db, smtp, get_settings()).send_reminders()
+    assert all(s["customer_id"] != "C002" for s in res["sent"])
+    assert {"customer_id": "C002", "reason": "dispute_or_legal"} in res["skipped"]
+    assert all("Arjun" not in e.body for e in smtp.sent)
+    assert any(s["customer_id"] == "C001" for s in res["sent"])  # others still chased
+
+
+async def test_extension_request_does_not_stop_reminders(db):
+    from app.services.reminder_service import ReminderService
+
+    await run_inbox(
+        db, [mail("<d2>", "arjun@t.example", "Hi", "Could we get more time?", "1")],
+        [llm_json("extension_request", needs=True)],
+    )
+    res = await ReminderService(db, FakeSmtp(), get_settings()).send_reminders()
+    assert any(s["customer_id"] == "C002" for s in res["sent"])

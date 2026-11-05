@@ -311,7 +311,11 @@ class InboundService:
             if confidence < self.settings.llm_min_confidence:
                 reason = f"low_confidence({confidence}); {reason}"
             await self._flag_needs_attention(
-                conversation, reason=reason, draft=draft, inbound=msg
+                conversation,
+                reason=reason,
+                draft=draft,
+                inbound=msg,
+                escalation=sorted({intent, *policy_hits}),
             )
             if intent in {"claims_paid", "promises_payment"}:
                 await self.repo.update_conversation(
@@ -583,6 +587,7 @@ class InboundService:
         reason: str,
         draft: str | None,
         inbound: InboundEmail,
+        escalation: list[str] | None = None,
     ) -> None:
         now = utc_now().isoformat()
         badges = list(
@@ -596,6 +601,7 @@ class InboundService:
             updated_at=now,
             badges=badges,
             last_inbound_message_id=inbound.message_id,
+            escalation=escalation or [],
         )
 
 
