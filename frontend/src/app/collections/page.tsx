@@ -1,5 +1,6 @@
 "use client";
 
+import { RejectedDraft } from "@/components/RejectedDraft";
 import { useCallback, useEffect, useState } from "react";
 
 import { ApiError, api } from "@/lib/api";
@@ -18,6 +19,8 @@ type Conv = Record<string, unknown> & {
   badges?: string[];
   needs_attention_reason?: string;
   ai_draft?: string;
+  rejected_ai_draft?: string | null;
+  rejected_reasons?: string[];
   subject?: string;
   customer_id?: string | null;
   messages?: Array<Record<string, unknown>>;
@@ -268,6 +271,10 @@ export default function CollectionsPage() {
                     className="h-40 w-full rounded border p-2 font-sans text-sm"
                     value={draft}
                     onChange={(e) => setDraft(e.target.value)}
+                  />
+                  <RejectedDraft
+                    rejectedDraft={selected.rejected_ai_draft}
+                    reasons={selected.rejected_reasons}
                   />
                   <div className="flex flex-wrap gap-2">
                     <button
