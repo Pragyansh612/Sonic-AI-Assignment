@@ -118,14 +118,20 @@ Requires Mongo on `localhost:27017` (`docker compose up -d`).
 
 ## API reference (examples)
 
-All mutating routes need `X-Admin-Token: $ADMIN_API_TOKEN`.
+Set the token once in your shell (same value as `ADMIN_API_TOKEN` in `.env`):
+
+```bash
+export ADMIN_API_TOKEN=change-me-to-a-long-random-string
+```
+
+Every `/api/v1` route except `/health` needs `X-Admin-Token: $ADMIN_API_TOKEN` (the Next.js proxy adds it for the UI).
 
 ### Part A
 
 ```bash
-curl -s http://localhost:8000/api/v1/organization | jq
-curl -s http://localhost:8000/api/v1/customers | jq 'length'
-curl -s 'http://localhost:8000/api/v1/invoices?overdue_only=true' | jq '.[].invoice_number'
+curl -s http://localhost:8000/api/v1/organization -H "X-Admin-Token: $ADMIN_API_TOKEN" | jq
+curl -s http://localhost:8000/api/v1/customers -H "X-Admin-Token: $ADMIN_API_TOKEN" | jq 'length'
+curl -s 'http://localhost:8000/api/v1/invoices?overdue_only=true' -H "X-Admin-Token: $ADMIN_API_TOKEN" | jq '.[].invoice_number'
 curl -s -X PATCH http://localhost:8000/api/v1/customers/C002 \
   -H "X-Admin-Token: $ADMIN_API_TOKEN" -H "Content-Type: application/json" \
   -d '{"contact_email":"you@gmail.com"}'
