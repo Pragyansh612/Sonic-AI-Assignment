@@ -24,6 +24,7 @@ from app.services.statement_parser import (
     parse_statement_csv,
     validate_upload_meta,
 )
+from app.services.transaction_fingerprint import transaction_fingerprint
 
 TdsMode = Literal["close_tds", "leave_open"]
 
@@ -65,12 +66,53 @@ class ReconciliationService:
 
         for row in parsed.transactions:
             transaction_id = f"txn_{uuid.uuid4().hex[:12]}"
+            amount_for_fp = int(
+                row.credit_minor
+                if row.credit_minor is not None
+                else (row.debit_minor or 0)
+            )
+            fingerprint = transaction_fingerprint(
+                txn_date=row.txn_date,
+                narration=row.narration,
+                amount_minor=amount_for_fp,
+                reference=row.reference,
+                currency=row.currency,
+            )
+            already = await self._repo.find_applied_by_fingerprint(fingerprint)
             base = {
                 "transaction_id": transaction_id,
                 "statement_id": statement_id,
                 **row.to_dict(),
+                "fingerprint": fingerprint,
                 "status": "debit_skipped" if row.is_debit else "pending_match",
             }
+
+            if already is not None and row.is_credit:
+                base["status"] = "already_applied"
+                base["prior_transaction_id"] = already.get("transaction_id")
+                txn_docs.append(base)
+                suggestion_docs.append(
+                    {
+                        "suggestion_id": f"sug_{uuid.uuid4().hex[:12]}",
+                        "statement_id": statement_id,
+                        "transaction_id": transaction_id,
+                        "row_number": row.row_number,
+                        "suggestion_type": "none",
+                        "invoice_numbers": [],
+                        "confidence": 0.0,
+                        "reason": "Already applied in a previous statement",
+                        "evidence": {
+                            "already_applied": True,
+                            "prior_transaction_id": already.get("transaction_id"),
+                        },
+                        "alternatives": [],
+                        "band": "none",
+                        "status": "already_applied",
+                        "fingerprint": fingerprint,
+                    }
+                )
+                continue
+
             txn_docs.append(base)
 
             if row.is_debit or not row.is_credit or row.credit_minor is None:
@@ -88,6 +130,7 @@ class ReconciliationService:
                         "alternatives": [],
                         "band": "none",
                         "status": "skipped",
+                        "fingerprint": fingerprint,
                     }
                 )
                 continue
@@ -118,6 +161,7 @@ class ReconciliationService:
                     "manual_choice": False,
                     "customer_mismatch": False,
                     "mismatch_warning": None,
+                    "fingerprint": fingerprint,
                 }
             )
 
@@ -293,7 +337,12 @@ class ReconciliationService:
             raise HTTPException(404, "Suggestion not found")
         if existing.get("status") == "approved":
             raise HTTPException(409, "Suggestion already approved")
-        if existing.get("status") in {"rejected", "skipped", "failed"}:
+        if existing.get("status") in {
+            "rejected",
+            "skipped",
+            "failed",
+            "already_applied",
+        }:
             raise HTTPException(
                 409, f"Suggestion is {existing.get('status')}, cannot approve"
             )
@@ -313,6 +362,22 @@ class ReconciliationService:
             raise HTTPException(
                 409, "This bank transaction was already applied to invoices"
             )
+
+        txn_preview = await self._db.bank_transactions.find_one(
+            {"transaction_id": txn_id}, {"_id": 0}
+        )
+        fp = (txn_preview or {}).get("fingerprint") or claimed.get("fingerprint")
+        if fp:
+            prior_fp = await self._repo.find_applied_by_fingerprint(fp)
+            if prior_fp is not None:
+                await self._repo.mark_suggestion(
+                    suggestion_id, "failed", error="fingerprint_already_applied"
+                )
+                raise HTTPException(
+                    409,
+                    "An identical bank transaction was already applied "
+                    "in a previous statement",
+                )
 
         txn = await self._db.bank_transactions.find_one(
             {"transaction_id": txn_id}, {"_id": 0}

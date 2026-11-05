@@ -57,6 +57,10 @@ async def ensure_indexes(db: AsyncIOMotorDatabase[Any] | None = None) -> None:
     await database.bank_statements.create_index("statement_id", unique=True)
     await database.bank_transactions.create_index("transaction_id", unique=True)
     await database.bank_transactions.create_index("statement_id")
+    await database.bank_transactions.create_index("fingerprint")
+    await database.bank_transactions.create_index(
+        [("fingerprint", 1), ("status", 1)]
+    )
 
     await database.match_suggestions.create_index("suggestion_id", unique=True)
     await database.match_suggestions.create_index("transaction_id", unique=True)

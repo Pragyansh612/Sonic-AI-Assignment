@@ -80,6 +80,15 @@ class ReconciliationRepository:
             {"_id": 0},
         )
 
+    async def find_applied_by_fingerprint(
+        self, fingerprint: str
+    ) -> dict[str, Any] | None:
+        """Any previously applied row with this fingerprint (any statement)."""
+        return await self.transactions.find_one(
+            {"fingerprint": fingerprint, "status": "applied"},
+            {"_id": 0},
+        )
+
     async def insert_payment(self, doc: dict[str, Any]) -> None:
         await self.payments.insert_one(doc)
 

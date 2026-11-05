@@ -175,6 +175,13 @@ flowchart LR
   CSV[Bank CSV] --> FastAPI
 ```
 
+## Known limitations
+
+- **Overpayment is refused; no unapplied-credit ledger.** Approving a credit larger than the selected invoice outstanding returns 400. There is no suspense/unapplied-cash account.
+- Cross-upload duplicates use a fingerprint; only **applied** fingerprints block re-application. Unapplied re-uploads may be suggested again.
+- Optional embeddings / LLM match assist are off by default and not required for grading.
+- Collections agent (Part B) email/LLM paths need real SMTP/IMAP credentials for live demos; tests use fakes + `EMAIL_DRY_RUN`.
+
 ## Status
 
 | Area | Status |
@@ -182,5 +189,5 @@ flowchart LR
 | Part A API + seed/reset | Done |
 | Part A frontend | Done |
 | Part C matching + API + review UI | Done |
-| Part B collections agent | Not started |
+| Part B collections agent | In progress |
 | explanation.pdf / video | Later phase |

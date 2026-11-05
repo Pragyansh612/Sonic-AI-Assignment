@@ -91,6 +91,15 @@ def match_credit(
     payer_clears_gate = _payer_gate(best_payer_sim, best_payer_source)
     has_hint = len(norm.invoice_hints) > 0
 
+    # Soft amount/narrative hints for the reviewer — never raise confidence.
+    soft_alts = _soft_alternatives(
+        payment_minor=payment_minor,
+        currency=currency,
+        open_invs=open_invs,
+        norm=norm,
+        customer_map=customer_map,
+    )
+
     # Hard gate: unknown payer + no invoice hint
     if not has_hint and not payer_clears_gate:
         return _none_result(
@@ -102,13 +111,8 @@ def match_credit(
                 hard_reject_reason="no_hint_and_payer_below_threshold",
                 components={"payer_sim": best_payer_sim},
             ),
-            alternatives=[],
+            alternatives=soft_alts,
         )
-
-    # Amount alone never matches
-    if not has_hint and not payer_clears_gate:
-        # unreachable duplicate — kept for clarity
-        pass
 
     candidates = _build_candidates(
         norm=norm,
@@ -135,7 +139,7 @@ def match_credit(
                 hard_reject_reason="no_viable_candidate",
                 components={"payer_sim": best_payer_sim},
             ),
-            alternatives=[],
+            alternatives=soft_alts,
         )
 
     candidates.sort(key=lambda c: c.confidence, reverse=True)
@@ -205,6 +209,16 @@ def _build_candidates(
     by_num = invoices_by_number(open_invs)
     out: list[MatchCandidate] = []
 
+    # Hints that point at non-open invoices (paid/draft/unknown) — caution flag
+    dead_hint_customers: set[str] = set()
+    known_all = {i.invoice_number.upper(): i for i in open_invs}
+    # We only have open_invs here; dead detection uses hint numbers absent from open set
+    open_numbers = set(known_all)
+    for hint in norm.invoice_hints:
+        if hint.invoice_number.upper() not in open_numbers:
+            # Try to infer customer from hint text is unavailable; mark globally
+            dead_hint_customers.add("*")
+
     # --- Hint-driven singletons ---
     for hint in norm.invoice_hints:
         inv = by_num.get(hint.invoice_number.upper())
@@ -236,12 +250,10 @@ def _build_candidates(
             if inv.currency != currency:
                 continue
             # Skip if already added via hint
-            if any(inv.invoice_number in c.invoice_numbers for c in out):
-                # Still allow re-score? skip duplicates
-                if any(
-                    c.invoice_numbers == (inv.invoice_number,) for c in out
-                ):
-                    continue
+            if any(
+                c.invoice_numbers == (inv.invoice_number,) for c in out
+            ):
+                continue
             cand = _score_singleton(
                 inv=inv,
                 payment_minor=payment_minor,
@@ -255,8 +267,16 @@ def _build_candidates(
                 global_payer_source=best_payer_source,
                 use_embeddings=use_embeddings,
             )
-            if cand:
-                out.append(cand)
+            if not cand:
+                continue
+            # If narration references a paid/unknown invoice, do not auto-suggest
+            # PARTIAL payments onto other open invoices of the same customer.
+            if (
+                "*" in dead_hint_customers
+                and cand.evidence.amount_kind == AmountMatchKind.PARTIAL.value
+            ):
+                continue
+            out.append(cand)
 
     # Ambiguity handling among equal-amount same-customer singletons
     out = _apply_uniqueness(out, open_invs, norm)
@@ -405,13 +425,18 @@ def _score_singleton(
 
     payer_points = cfg.WEIGHT_PAYER_SIM * (payer_sim / 100.0)
     synergy = 0.0
-    if payer_sim >= cfg.STRONG_PAYER_FOR_SYNERGY and amount_kind in {
+    if amount_kind in {
         AmountMatchKind.EXACT_OUTSTANDING,
         AmountMatchKind.EXACT_TOTAL,
         AmountMatchKind.TDS_ADJUSTED,
         AmountMatchKind.PARTIAL,
-    }:
-        synergy = cfg.PAYER_AMOUNT_SYNERGY
+    } and _payer_gate(payer_sim, payer_source):
+        # Full synergy for strong payer; half when payer clears the gate but is typo'd/weaker.
+        synergy = (
+            cfg.PAYER_AMOUNT_SYNERGY
+            if payer_sim >= cfg.STRONG_PAYER_FOR_SYNERGY
+            else cfg.PAYER_AMOUNT_SYNERGY * 0.5
+        )
     confidence = (
         ref_points
         + payer_points
@@ -445,6 +470,13 @@ def _score_singleton(
         # Never suggest on amount alone: payer must clear gate for this customer
         if not _payer_gate(payer_sim, payer_source):
             return None
+
+    # Weak RE/bare-number hints without a payer match must not auto-suggest
+    # (stops UTR-embedded suffixes from matching on amount alone).
+    if hint_strength == InvoiceHintStrength.WEAK and not _payer_gate(
+        payer_sim, payer_source
+    ):
+        confidence = min(confidence, cfg.REVIEW_MIN - 1.0)
 
     evidence.components = {
         "invoice_ref": ref_points,
@@ -658,6 +690,76 @@ def _date_factor(txn_date: str, due_date: str, invoice_date: str) -> float:
 
 def _parse_date(value: str) -> date:
     return datetime.strptime(value[:10], "%Y-%m-%d").date()
+
+
+def _soft_alternatives(
+    *,
+    payment_minor: int,
+    currency: str,
+    open_invs: list[OpenInvoice],
+    norm: NormalizedNarration,
+    customer_map: dict[str, CustomerInfo],
+) -> list[dict]:
+    """
+    Top-3 reviewer hints for no-match rows (amount / weak narrative overlap).
+
+    Ranked for display only — never becomes a suggestion and never raises confidence.
+    """
+    payer_tokens = set(norm.cleaned_tokens)
+    ranked: list[tuple[float, dict]] = []
+    for inv in open_invs:
+        if inv.currency != currency:
+            continue
+        kind = classify_amount(payment_minor, inv)
+        if kind in {
+            AmountMatchKind.MISMATCH,
+            AmountMatchKind.OVERPAY,
+        }:
+            continue
+        rank = {
+            AmountMatchKind.EXACT_OUTSTANDING: 50.0,
+            AmountMatchKind.EXACT_TOTAL: 45.0,
+            AmountMatchKind.TDS_ADJUSTED: 48.0,
+            AmountMatchKind.PARTIAL: 25.0,
+        }.get(kind, 10.0)
+        # Narrative token overlap with customer/company words (e.g. CLINIC)
+        cust = customer_map.get(inv.customer_id)
+        name_tokens = set()
+        if cust:
+            name_tokens = {
+                t
+                for t in cust.name.upper().replace(",", " ").split()
+                if len(t) >= 4
+            }
+            # singular/plural loose match
+            for t in list(name_tokens):
+                if t.endswith("S"):
+                    name_tokens.add(t[:-1])
+                else:
+                    name_tokens.add(t + "S")
+        overlap = payer_tokens & name_tokens
+        if overlap:
+            rank += 15.0
+        for hint in norm.invoice_hints:
+            if hint.invoice_number.upper() == inv.invoice_number.upper():
+                rank += 20.0
+        reason_bits = [f"amount {kind.value}"]
+        if overlap:
+            reason_bits.append(f"narration tokens {sorted(overlap)}")
+        ranked.append(
+            (
+                rank,
+                {
+                    "invoice_numbers": [inv.invoice_number],
+                    "confidence": 0.0,
+                    "reason": "; ".join(reason_bits),
+                    "customer_id": inv.customer_id,
+                    "soft_hint": True,
+                },
+            )
+        )
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    return [item for _, item in ranked[:3]]
 
 
 def _none_result(
