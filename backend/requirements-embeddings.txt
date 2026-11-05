@@ -1,0 +1,3 @@
+# Optional: only needed when ENABLE_EMBEDDINGS=true
+-r requirements.txt
+sentence-transformers==3.3.1

@@ -85,11 +85,13 @@ curl -s http://localhost:8000/api/v1/health | jq
 | `ENABLE_REMINDER_SCHEDULER` | backend | Daily reminder job | `false` |
 | `ENABLE_INBOX_POLL` | backend | IMAP poll loop | `false` |
 | `INBOX_POLL_SECONDS` | backend | Poll interval | `120` |
+| `LLM_PROVIDER` | backend | Provider label (only `openai_compatible` is implemented) | `openai_compatible` |
 | `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | backend | OpenAI-compatible chat | Gemini URL + flash |
 | `LLM_MIN_CONFIDENCE` | backend | Below → Needs attention | `0.75` |
 | `MAX_EMAIL_BODY_CHARS` | backend | Body size cap | `12000` |
-| `ENABLE_EMBEDDINGS` | backend | Optional MiniLM | `false` |
+| `ENABLE_EMBEDDINGS` | backend | Optional MiniLM; needs `pip install -r requirements-embeddings.txt` | `false` |
 | `ENABLE_LLM_MATCH_ASSIST` | backend | Optional LLM match assist | `false` |
+| `MATCH_USE_EMBEDDINGS` / `MATCH_USE_LLM` | backend | Aliases of `ENABLE_EMBEDDINGS` / `ENABLE_LLM_MATCH_ASSIST` | `false` |
 | `BACKEND_URL` | frontend `.env.local` | Proxy upstream | — |
 | `ADMIN_TOKEN` | frontend `.env.local` | Injected by proxy | — |
 
@@ -183,11 +185,22 @@ curl -s -X POST …/needs-attention/{id}/dismiss
 - **Overpayment is refused; no unapplied-credit ledger.**
 - Fingerprint blocks only **applied** rows; unapplied re-uploads may be re-suggested.
 - Email evidence boost is capped (+5) and cannot create a match alone.
-- Human Needs attention → Send warns on validator failures but still sends (human override).
+- Human Needs attention → Send is blocked on validator failures until the operator confirms (`acknowledge_warnings`); then it sends and logs the warnings.
 - Schedulers off by default; Gmail IMAP can lag (click Check inbox again).
 - `EMAIL_DRY_RUN=true` writes outbox docs instead of SMTP.
 - Optional embeddings / LLM match assist are off and unused for grading.
 - Single-process rate limits (not shared across replicas).
+- The Next.js proxy has no login: anyone who can reach port 3000 acts as the operator (cross-origin writes are blocked, but put real auth in front for anything beyond a demo).
+- Sender identity is the `From:` address only (no SPF/DKIM check); replies always go to the stored `contact_email`, never to the sender or `Reply-To`.
+- Reminder bodies are rendered from DB values and not re-run through the validator.
+- Two genuinely identical receipts (same date, narration, amount, reference) share a fingerprint, so the second cannot be approved.
+- A crash in the middle of an approval (no transactions) can leave a suggestion in `approving`; the invoice update itself is compare-and-set guarded.
+- A second approve of the same suggestion returns 409 instead of replaying the first result (it never double-applies).
+- CSV: only `,` delimiter and the date formats in `statement_parser.py`; amounts with currency symbols become row errors.
+- Uploads are read into memory before the 2 MB cap is enforced; SMTP STARTTLS does not pin/verify certificates beyond Python defaults; IMAP/SMTP calls are synchronous inside async handlers.
+- The inbox lock has a 120 s TTL with no heartbeat.
+- Layering: `routes/collections.py` builds the SMTP/IMAP/LLM clients itself, and some services touch `db.messages` / `db.audit_log` directly.
+- If SMTP succeeds but the follow-up DB write fails, a retry can resend that one reply.
 
 ## Finished / not finished
 

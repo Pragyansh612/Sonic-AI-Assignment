@@ -31,7 +31,7 @@ We built an accounts console that (A) manages org/customers/invoices, (B) sends 
 
 **Outbound reminders:** overdue (`status=sent`, balance > 0, due before today) only; one email per customer; facts from DB templates; subject token `[AC-...]`; cooldown; overlap lock.
 
-**Inbound order:** Message-ID dedupe → auto-reply/bounce headers → resolve conversation (In-Reply-To → `[AC-…]` → sender email) → strip quoted history → keyword safety (legal / dispute / extension / other customer) → LLM JSON (tolerant of fences/prose; pydantic-validated; retry once) with **only this customer’s unpaid sent invoices** → compose (code facts + LLM prose) → **validator** (invoice #s, amounts, dates, no foreign names/banks, no paid/waiver promises) → SMTP or Needs attention.
+**Inbound order:** Message-ID dedupe → auto-reply/bounce headers → resolve conversation (In-Reply-To → `[AC-…]` → sender email; a thread is only used if it belongs to the sender) → strip quoted history → keyword safety (legal / dispute / extension / other customer) → LLM JSON (tolerant of fences/prose; pydantic-validated; retry once) with **only this customer’s unpaid sent invoices** → compose (code facts + LLM prose) → **validator** (whitelist: every invoice #, amount, date, bank code, e-mail and link must come from this customer's context or the org record; no paid/waiver promises) → SMTP or Needs attention. Only balance/payment-details questions and payment claims can ever be auto-answered; any other intent goes to a human. A failed send keeps the mail unseen and retryable.
 
 Unknown senders and other-company mentions get nothing. Claims of payment never mark invoices paid. Mixed intents escalate entirely.
 
@@ -41,4 +41,4 @@ Browser → Next.js allowlisted proxy → FastAPI → Mongo. Secrets stay server
 
 ## 5. Limitations
 
-No unapplied-credit ledger (overpay refused). Human Needs-attention send warns instead of hard-blocking. Schedulers off by default. Matcher still imperfect on pathological lookalikes; we bias to `none`. Live Gmail/LLM quality depends on operator credentials and provider JSON behaviour.
+No unapplied-credit ledger (overpay refused). A human may override a failed validation in Needs attention, but only after an explicit confirmation (acknowledge_warnings). Schedulers off by default. Matcher still imperfect on pathological lookalikes; we bias to `none`. Live Gmail/LLM quality depends on operator credentials and provider JSON behaviour.
