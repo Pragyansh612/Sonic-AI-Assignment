@@ -72,6 +72,15 @@ function adminToken(): string {
   return token;
 }
 
+let warnedTokenMismatch = false;
+function warnTokenMismatchOnce(): void {
+  if (warnedTokenMismatch) return;
+  warnedTokenMismatch = true;
+  console.warn(
+    "[proxy] Backend rejected ADMIN_TOKEN (401). Frontend ADMIN_TOKEN must equal backend ADMIN_API_TOKEN.",
+  );
+}
+
 async function forward(
   request: NextRequest,
   pathParts: string[],
@@ -133,6 +142,9 @@ async function forward(
   try {
     const upstream = await fetch(target, init);
     const text = await upstream.text();
+    if (upstream.status === 401) {
+      warnTokenMismatchOnce();
+    }
     const responseHeaders = new Headers();
     const upstreamCt = upstream.headers.get("content-type");
     if (upstreamCt) {

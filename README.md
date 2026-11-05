@@ -36,7 +36,9 @@ cp .env.example .env
 
 cp frontend/.env.example frontend/.env.local
 # BACKEND_URL=http://localhost:8000
-# ADMIN_TOKEN must equal ADMIN_API_TOKEN
+# ADMIN_TOKEN must equal ADMIN_API_TOKEN. Both examples ship with the same
+# placeholder so this works as-is; if you change one, change the other
+# (a mismatch shows as 401 in the UI and a warning in the Next.js console).
 
 # 2) Mongo
 docker compose up -d
@@ -127,7 +129,7 @@ curl -s -X PATCH http://localhost:8000/api/v1/customers/C002 \
   -d '{"contact_email":"you@gmail.com"}'
 curl -s -X POST http://localhost:8000/api/v1/admin/reset \
   -H "X-Admin-Token: $ADMIN_API_TOKEN" -H "Content-Type: application/json" \
-  -d '{"confirm":true}'
+  -d '{"confirm":"RESET"}'
 ```
 
 ### Reconciliation (Part C)
