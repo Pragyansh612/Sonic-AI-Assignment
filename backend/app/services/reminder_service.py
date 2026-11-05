@@ -112,18 +112,19 @@ class ReminderService:
                     conversation_id=conversation_id,
                 )
             )
-            await self.repo.upsert_conversation(
-                {
-                    "conversation_id": conversation_id,
-                    "customer_id": customer_id,
-                    "kind": "customer",
-                    "status": "open",
-                    "subject": subject,
-                    "last_reminder_at": now.isoformat(),
-                    "updated_at": now.isoformat(),
-                    "created_at": conv.get("created_at") if conv else now.isoformat(),
-                }
-            )
+            conv_doc = {
+                "conversation_id": conversation_id,
+                "customer_id": customer_id,
+                "kind": "customer",
+                "subject": subject,
+                "last_reminder_at": now.isoformat(),
+                "updated_at": now.isoformat(),
+                "created_at": conv.get("created_at") if conv else now.isoformat(),
+            }
+            # Never silently clear a pending human item.
+            if not conv or conv.get("status") != "needs_attention":
+                conv_doc["status"] = "open"
+            await self.repo.upsert_conversation(conv_doc)
             await self.repo.insert_message(
                 {
                     "message_id": message_id,
