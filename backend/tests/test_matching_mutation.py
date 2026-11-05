@@ -271,6 +271,52 @@ def _mutations_for(rng: random.Random, narration: str) -> list[tuple[str, str]]:
     ]
 
 
+def _classify_downgrade(
+    *,
+    case: CorrectCase,
+    mutated: str,
+    result,
+    invoices,
+    known_nums: list[str],
+) -> str:
+    """Group a downgrade: ambiguity | payer_below_gate | hint_lost | other."""
+    from app.services.matching import config as cfg
+    from app.services.matching.normalize import normalize_narration
+
+    orig = normalize_narration(case.narration, known_invoice_numbers=known_nums)
+    mut = normalize_narration(mutated, known_invoice_numbers=known_nums)
+    expected = set(case.invoice_numbers)
+    orig_hints = {h.invoice_number for h in orig.invoice_hints}
+    mut_hints = {h.invoice_number for h in mut.invoice_hints}
+    hint_lost = bool(orig_hints & expected) and not bool(mut_hints & expected)
+    hard = (result.evidence or {}).get("hard_reject_reason") or ""
+    payer_sim = float((result.evidence or {}).get("payer_sim") or 0)
+    siblings = [
+        i
+        for i in invoices
+        if i.customer_id in case.customer_ids
+        and int(i.outstanding_minor) == int(case.payment_minor)
+        and i.status == "sent"
+        and int(i.outstanding_minor) > 0
+    ]
+
+    reason_l = (result.reason or "").lower()
+    if hard == "no_hint_and_payer_below_threshold" or "payer not recognized" in reason_l:
+        return "payer_below_gate"
+    if hint_lost and len(siblings) >= 2 and not (mut_hints & expected):
+        return "ambiguity"
+    if hint_lost:
+        return "hint_lost"
+    if hard == "no_viable_candidate" or "amount does not match" in reason_l:
+        return "other"
+    # Soft miss: typo knocked confidence under REVIEW_MIN ("No confident match")
+    if "no confident match" in reason_l:
+        return "payer_below_gate"
+    if payer_sim and payer_sim < cfg.PAYER_SIM_THRESHOLD and not mut_hints:
+        return "payer_below_gate"
+    return "other"
+
+
 def test_mutation_never_wrong_match() -> None:
     invoices = load_open_invoices()
     customers = load_customers()
@@ -281,11 +327,13 @@ def test_mutation_never_wrong_match() -> None:
     downgraded = 0
     wrong = 0
     wrong_details: list[str] = []
+    downgrade_details: list[dict[str, str]] = []
     total = 0
 
     print("\n=== Mutation robustness ===")
     print(f"base_correct_rows={len(cases)} seed={MUTATION_SEED}")
 
+    known_nums = [i.invoice_number for i in invoices]
     for case in cases:
         # Independent RNG stream per case for stability if cases reorder slightly
         rng = random.Random(f"{MUTATION_SEED}:{case.source}:{case.row}:{case.narration}")
@@ -307,6 +355,21 @@ def test_mutation_never_wrong_match() -> None:
 
             if got_type == "none" or not got_nums:
                 downgraded += 1
+                downgrade_details.append(
+                    {
+                        "cause": _classify_downgrade(
+                            case=case,
+                            mutated=mutated,
+                            result=result,
+                            invoices=invoices,
+                            known_nums=known_nums,
+                        ),
+                        "source": case.source,
+                        "row": str(case.row),
+                        "mutation": name,
+                        "mut": mutated,
+                    }
+                )
                 continue
 
             if got_nums == expected:
@@ -333,6 +396,20 @@ def test_mutation_never_wrong_match() -> None:
             print(d)
         if len(wrong_details) > 40:
             print(f"... and {len(wrong_details) - 40} more")
+
+    # Cause breakdown for downgrades (informational; printed with -s)
+    if downgrade_details:
+        from collections import Counter
+
+        causes = Counter(d["cause"] for d in downgrade_details)
+        print("--- downgraded-to-none by cause ---")
+        for cause, n in causes.most_common():
+            print(f"  {cause}: {n}")
+        for d in downgrade_details:
+            print(
+                f"  [{d['cause']}] {d['source']} r{d['row']} "
+                f"{d['mutation']}: {d['mut']!r}"
+            )
 
     assert wrong == 0, (
         f"{wrong} mutation(s) produced a different invoice/customer:\n"

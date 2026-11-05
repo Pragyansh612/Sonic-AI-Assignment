@@ -42,8 +42,11 @@ AMOUNT_MISMATCH: float = 0.0
 # Soft bonus when within N days of due date
 DATE_DUE_PROXIMITY_DAYS: int = 14
 
-# Ambiguity: same-customer equal amounts without unique invoice hint
-AMBIGUOUS_CONFIDENCE_CAP: float = 78.0
+# Ambiguity: same-customer equal outstanding, no unique invoice hint.
+# Policy: still suggest earliest-due, but confidence MUST stay under HIGH_CONFIDENCE
+# (review band), and every sibling invoice is named in reason + alternatives.
+AMBIGUOUS_CONFIDENCE_CAP: float = 78.0  # must be < HIGH_CONFIDENCE
+AMBIGUOUS_RIVAL_CONFIDENCE_DELTA: float = 1.0
 
 # Multi-invoice subset-sum
 MULTI_MIN_SIZE: int = 2

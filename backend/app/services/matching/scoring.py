@@ -571,7 +571,8 @@ def _apply_uniqueness(
             seen_nums.add(hinted_group[0].invoice_numbers[0])
             continue
 
-        # Earliest due date
+        # Exact-tie siblings, no unique hint: suggest earliest due under the
+        # review band, and keep every sibling visible in reason + alternatives.
         def due_key(c: MatchCandidate) -> str:
             inv = by_num[c.invoice_numbers[0].upper()]
             return inv.due_date
@@ -579,16 +580,34 @@ def _apply_uniqueness(
         group_sorted = sorted(group, key=due_key)
         winner = group_sorted[0]
         rivals = [c.invoice_numbers[0] for c in group_sorted]
-        winner.confidence = min(winner.confidence, cfg.AMBIGUOUS_CONFIDENCE_CAP)
+        rival_list = ", ".join(rivals)
+        cap = min(cfg.AMBIGUOUS_CONFIDENCE_CAP, cfg.HIGH_CONFIDENCE - 0.1)
+        winner.confidence = min(winner.confidence, cap)
         winner.evidence.uniqueness_note = (
-            f"ambiguous between {'/'.join(rivals)}; earliest due chosen"
+            f"ambiguous between {rival_list}; earliest due chosen"
         )
         winner.reason = (
-            f"{winner.reason} (ambiguous between {'/'.join(rivals)}, "
-            f"earliest due chosen)"
+            f"{winner.reason} (ambiguous between {rival_list}; "
+            f"earliest due chosen — review band)"
         )
         resolved.append(winner)
         seen_nums.add(winner.invoice_numbers[0])
+        # Keep rivals so alternatives lists every sibling invoice.
+        for i, rival in enumerate(group_sorted[1:], start=1):
+            rival.confidence = min(
+                rival.confidence,
+                cap - cfg.AMBIGUOUS_RIVAL_CONFIDENCE_DELTA * i,
+            )
+            rival.evidence.uniqueness_note = (
+                f"ambiguous sibling of {winner.invoice_numbers[0]} "
+                f"among {rival_list}"
+            )
+            rival.reason = (
+                f"{rival.reason} (ambiguous sibling among {rival_list}; "
+                f"not selected — earliest due was {winner.invoice_numbers[0]})"
+            )
+            resolved.append(rival)
+            seen_nums.add(rival.invoice_numbers[0])
 
     # Keep any singles not grouped (shouldn't happen) + multi
     for c in singles:

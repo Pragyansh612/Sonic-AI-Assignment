@@ -106,8 +106,8 @@ curl -s http://localhost:8000/api/v1/health | jq
 cd backend
 source .venv/bin/activate
 pytest -v -s
-# Matching tables:
-pytest tests/test_matching_eval.py tests/test_matching_holdout.py -s
+# Matching tables + mutation stress:
+pytest tests/test_matching_eval.py tests/test_matching_holdout.py tests/test_matching_mutation.py -s
 ```
 
 Requires Mongo on `localhost:27017` (`docker compose up -d`).
@@ -212,4 +212,6 @@ Weights/thresholds: `backend/app/services/matching/config.py`.
 5. Hard gates: unknown payer + no invoice # → none; amount-alone → none; wrong currency → none; payment before invoice_date → reject; conf &lt; 60 → none  
 6. Soft top-3 alternatives on `none` for the reviewer  
 
-Held-out set: `backend/tests/fixtures/eval_holdout.csv` (+ labels).
+**Self-authored eval sets:** held-out adversarial CSV `backend/tests/fixtures/eval_holdout.csv` (+ labels) and the mutation stress suite were written without peeking at thresholds.
+
+**Stress test (mutations, seed 20261105):** 48 correct base rows → 271 mutations → **254 same / 17 none / 0 wrong**. Exact-tie siblings (same customer + amount, no hint) stay in the review band with both invoice numbers in the reason and alternatives.

@@ -25,7 +25,7 @@ We built an accounts console that (A) manages org/customers/invoices, (B) sends 
 8. **Idempotency:** `sha256(date|narration|amount_minor|reference|currency)`; if already applied on any statement → `already_applied` / approve 409.
 9. **Bonus:** inbound “paid INV-…” / UTR claims store evidence shown on statement rows and add a **+5** boost only to candidates that already cleared gates — never enough to create a match alone.
 
-Held-out adversarial eval (40+ rows written without looking at thresholds): precision and recall both 1.0 on the current fixture set; no wrong/missed rows.
+**Eval / stress tests (self-authored):** the held-out adversarial CSV (`eval_holdout.csv`, 40+ rows) and the mutation stress suite were written by us without looking at matcher thresholds. Holdout: precision = recall = 1.0 (no wrong/missed rows). Mutation stress (`test_matching_mutation.py`, seed 20261105): from 48 correctly matched base rows, **271** mutations → **254** same / **17** downgraded-to-none / **0** wrong. Policy for exact-tie sibling invoices (same customer, same amount, no hint): suggest earliest due under the review band (`confidence` capped below high), and name every sibling in the reason and alternatives. Merged digit runs (`RE 10-25`) are weak open-suffix hints only; bare dates / UTR digit soup must not invent invoice hints.
 
 ## 3. Collections agent (Part B)
 

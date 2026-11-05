@@ -85,21 +85,65 @@ _DATE_TOKEN_RE = re.compile(
     r"\d{1,2}\s+(?:JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC)[A-Z]*\s+\d{2,4})\b",
     re.IGNORECASE,
 )
-# Allow optional spaces/hyphens inside the digit run (INV 10-25 → 1025).
-_INV_STRONG_RE = re.compile(
-    r"\bINV[-\s]?((?:\d[-\s]?){2,6}\d)\b",
+
+# Contiguous invoice digits (INV-1025 / INV 1025 / INV1025).
+_INV_CONTIGUOUS_RE = re.compile(r"\bINV[-\s]?(\d{3,6})\b", re.IGNORECASE)
+_INV_COMPACT_RE = re.compile(r"\bINV(\d{3,6})\b", re.IGNORECASE)
+_RE_CONTIGUOUS_RE = re.compile(r"\b(?:RE|REF)[-\s]?(\d{3,6})\b", re.IGNORECASE)
+
+# Merged digit runs with internal spaces/hyphens (INV 10-25 → digits 1025).
+# Always treated as WEAK and only when they map to an open invoice suffix.
+_INV_MERGED_RE = re.compile(
+    r"\bINV[-\s]?(\d+(?:[-\s]+\d+)+)\b",
     re.IGNORECASE,
 )
-_INV_COMPACT_RE = re.compile(r"\bINV((?:\d[-\s]?){2,6}\d)\b", re.IGNORECASE)
-_RE_REF_RE = re.compile(
-    r"\b(?:RE|REF)[-\s]?((?:\d[-\s]?){2,6}\d)\b",
+_RE_MERGED_RE = re.compile(
+    r"\b(?:RE|REF)[-\s]?(\d+(?:[-\s]+\d+)+)\b",
     re.IGNORECASE,
 )
 _BARE_NUM_RE = re.compile(r"\b(\d{4,6})\b")
+_TIME_AMPM_RE = re.compile(
+    r"\b\d{1,2}\s+\d{2}\s*(?:AM|PM)\b",
+    re.IGNORECASE,
+)
 
 
 def _digits_only(value: str) -> str:
     return re.sub(r"\D", "", value or "")
+
+
+def _is_date_shaped(raw_number: str) -> bool:
+    """
+    True for full dates and bare month/day style fragments that must not become
+    invoice hints (e.g. 25-10-2026, 10-25, 10/25/26).
+    """
+    s = (raw_number or "").strip()
+    if not s:
+        return False
+    if _TIME_AMPM_RE.search(s):
+        return True
+    # 25-10-2026 / 10/25/2026 / 2026-10-25
+    if re.match(r"^\d{1,4}[-\s/]\d{1,2}[-\s/]\d{1,4}$", s):
+        return True
+    # Two-part 10-25 / 10 25 — only date-shaped when NOT under INV/RE (caller decides).
+    # Here: treat as date-shaped when both parts look like day/month (<=31) and
+    # the merged length is 3-4 (so 10-25 → 1025 looks invoice-like but is date-shaped
+    # for *bare* contexts). For prefixed INV/RE merged tokens the caller may still
+    # accept if open-suffix maps — see _extract_hints.
+    m = re.match(r"^(\d{1,2})[-\s/](\d{1,2})$", s)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        if 1 <= a <= 31 and 1 <= b <= 31:
+            return True
+    return False
+
+
+def _is_full_or_time_date(raw_number: str) -> bool:
+    """Stricter: 3-part dates and AM/PM times — never valid invoice digit runs."""
+    s = (raw_number or "").strip()
+    if _TIME_AMPM_RE.search(s):
+        return True
+    return bool(re.match(r"^\d{1,4}[-\s/]\d{1,2}[-\s/]\d{1,4}$", s))
 
 
 def normalize_narration(
@@ -127,9 +171,12 @@ def normalize_narration(
     cleaned = _BANK_CODE_RE.sub(" ", cleaned)
     cleaned = _LONG_REF_RE.sub(" ", cleaned)
     cleaned = _DATE_TOKEN_RE.sub(" ", cleaned)
-    cleaned = _INV_STRONG_RE.sub(" ", cleaned)
+    cleaned = _TIME_AMPM_RE.sub(" ", cleaned)
+    cleaned = _INV_CONTIGUOUS_RE.sub(" ", cleaned)
     cleaned = _INV_COMPACT_RE.sub(" ", cleaned)
-    cleaned = _RE_REF_RE.sub(" ", cleaned)
+    cleaned = _INV_MERGED_RE.sub(" ", cleaned)
+    cleaned = _RE_CONTIGUOUS_RE.sub(" ", cleaned)
+    cleaned = _RE_MERGED_RE.sub(" ", cleaned)
     # INT.PD style interest markers
     cleaned = re.sub(r"\bINT\.?\s*PD\b[:\s0-9\-]*", " ", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"[^A-Z0-9\s]", " ", cleaned)
@@ -172,14 +219,16 @@ def _extract_hints(
     hints: list[InvoiceHint] = []
     seen: set[str] = set()
 
-    def add(raw: str, suffix: str, strength: InvoiceHintStrength) -> None:
-        suffix = _digits_only(suffix)
+    def add_contiguous(
+        raw: str, suffix_raw: str, strength: InvoiceHintStrength
+    ) -> None:
+        if _is_date_shaped(suffix_raw) or _is_full_or_time_date(suffix_raw):
+            return
+        suffix = _digits_only(suffix_raw)
         if len(suffix) < 3 or len(suffix) > 6:
             return
         canonical = suffix_map.get(suffix)
         if not canonical:
-            # Strong INV tokens: still record even if not in open set —
-            # scoring will handle unknown / paid invoices.
             if strength == InvoiceHintStrength.STRONG:
                 canonical = f"INV-{suffix}"
             else:
@@ -191,19 +240,51 @@ def _extract_hints(
             InvoiceHint(raw=raw, invoice_number=canonical, strength=strength)
         )
 
-    for m in _INV_STRONG_RE.finditer(upper):
-        add(m.group(0), m.group(1), InvoiceHintStrength.STRONG)
+    def add_merged_weak(raw: str, suffix_raw: str) -> None:
+        """INV/RE digit runs with internal spaces/hyphens → weak open-suffix only."""
+        if _is_full_or_time_date(suffix_raw):
+            return
+        suffix = _digits_only(suffix_raw)
+        if len(suffix) < 3 or len(suffix) > 6:
+            return
+        canonical = suffix_map.get(suffix)
+        if not canonical:
+            return
+        if canonical in seen:
+            return
+        seen.add(canonical)
+        hints.append(
+            InvoiceHint(
+                raw=raw,
+                invoice_number=canonical,
+                strength=InvoiceHintStrength.WEAK,
+            )
+        )
+
+    for m in _INV_CONTIGUOUS_RE.finditer(upper):
+        add_contiguous(m.group(0), m.group(1), InvoiceHintStrength.STRONG)
     for m in _INV_COMPACT_RE.finditer(upper):
-        add(m.group(0), m.group(1), InvoiceHintStrength.STRONG)
-    for m in _RE_REF_RE.finditer(upper):
-        add(m.group(0), m.group(1), InvoiceHintStrength.WEAK)
-    # Bare numbers only when uniquely mapped
+        add_contiguous(m.group(0), m.group(1), InvoiceHintStrength.STRONG)
+    for m in _INV_MERGED_RE.finditer(upper):
+        add_merged_weak(m.group(0), m.group(1))
+
+    for m in _RE_CONTIGUOUS_RE.finditer(upper):
+        add_contiguous(m.group(0), m.group(1), InvoiceHintStrength.WEAK)
+    for m in _RE_MERGED_RE.finditer(upper):
+        add_merged_weak(m.group(0), m.group(1))
+
     for m in _BARE_NUM_RE.finditer(upper):
-        # Skip if already part of a stronger match span — crude: skip if INV nearby
         start = max(0, m.start() - 4)
-        window = upper[start : m.end()]
+        window = upper[start : m.end() + 3]
         if "INV" in window or re.search(r"\b(?:RE|REF)\b", window):
             continue
-        add(m.group(0), m.group(1), InvoiceHintStrength.WEAK)
+        ctx_start = max(0, m.start() - 10)
+        ctx = upper[ctx_start : m.end() + 10]
+        if _DATE_TOKEN_RE.search(ctx) or _TIME_AMPM_RE.search(ctx):
+            continue
+        # Do not lift digits out of "10-25" / "25-10-2026" style fragments
+        if re.search(r"\d{1,2}[-\s/]\d{1,2}([-\s/]\d{2,4})?", ctx):
+            continue
+        add_contiguous(m.group(0), m.group(1), InvoiceHintStrength.WEAK)
 
     return hints
