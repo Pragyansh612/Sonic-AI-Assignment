@@ -180,12 +180,19 @@ export const api = {
       `collections/needs-attention/${encodeURIComponent(id)}`,
       { method: "PATCH", body: JSON.stringify({ draft }) },
     ),
-  sendNeedsAttention: (id: string, draft?: string) =>
+  sendNeedsAttention: (
+    id: string,
+    draft?: string,
+    acknowledgeWarnings = false,
+  ) =>
     proxy<Record<string, unknown>>(
       `collections/needs-attention/${encodeURIComponent(id)}/send`,
       {
         method: "POST",
-        body: JSON.stringify(draft !== undefined ? { draft } : {}),
+        body: JSON.stringify({
+          ...(draft !== undefined ? { draft } : {}),
+          ...(acknowledgeWarnings ? { acknowledge_warnings: true } : {}),
+        }),
       },
     ),
   dismissNeedsAttention: (id: string) =>

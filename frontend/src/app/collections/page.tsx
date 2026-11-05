@@ -23,6 +23,16 @@ type Conv = Record<string, unknown> & {
   messages?: Array<Record<string, unknown>>;
 };
 
+/** Warnings from a 409 "validation_warnings" response, else null. */
+function validationWarnings(err: unknown): string[] | null {
+  if (!(err instanceof ApiError) || err.status !== 409) return null;
+  const detail = (err.details as { detail?: { code?: string; warnings?: string[] } })
+    ?.detail;
+  return detail?.code === "validation_warnings" && detail.warnings
+    ? detail.warnings
+    : null;
+}
+
 export default function CollectionsPage() {
   const [tab, setTab] = useState<"conversations" | "needs">("conversations");
   const [conversations, setConversations] = useState<Conv[]>([]);
@@ -270,10 +280,30 @@ export default function CollectionsPage() {
                               selected.conversation_id,
                               draft,
                             );
-                            const result = await api.sendNeedsAttention(
-                              selected.conversation_id,
-                              draft,
-                            );
+                            let result: Record<string, unknown>;
+                            try {
+                              result = await api.sendNeedsAttention(
+                                selected.conversation_id,
+                                draft,
+                              );
+                            } catch (err) {
+                              const warnings = validationWarnings(err);
+                              if (
+                                warnings === null ||
+                                !window.confirm(
+                                  "This draft failed the safety check:\n\n- " +
+                                    warnings.join("\n- ") +
+                                    "\n\nSend it anyway?",
+                                )
+                              ) {
+                                throw err;
+                              }
+                              result = await api.sendNeedsAttention(
+                                selected.conversation_id,
+                                draft,
+                                true,
+                              );
+                            }
                             const warnings = (result.warnings as string[]) || [];
                             setToast({
                               message: warnings.length
