@@ -23,6 +23,25 @@ EXTENSION_RE = re.compile(
 )
 
 
+# Words that appear in company names but identify no one in particular.
+_GENERIC_NAME_WORDS = frozenset(
+    {
+        "private", "limited", "company", "services", "solutions", "systems", "group",
+        "technologies", "technology", "logistics", "foods", "retail", "media", "clinics",
+        "analytics", "packaging", "hospitality", "industries", "enterprises", "global",
+        "international", "holdings", "partners", "consulting", "trading", "India",
+    }
+)
+
+
+def _distinctive_tokens(name: str) -> set[str]:
+    return {
+        t.lower()
+        for t in re.split(r"\W+", name)
+        if len(t) >= 5 and t.lower() not in {w.lower() for w in _GENERIC_NAME_WORDS}
+    }
+
+
 def scan_body_for_policy_hits(
     body: str,
     *,
@@ -38,16 +57,26 @@ def scan_body_for_policy_hits(
     if EXTENSION_RE.search(body):
         hits.append("extension")
 
+    own = next((c for c in all_customers if c["customer_id"] == customer_id), None)
+    own_tokens = _distinctive_tokens(own["name"]) if own else set()
+    body_lower = body.lower()
     for other in all_customers:
         if other["customer_id"] == customer_id:
             continue
         name = other["name"]
         tokens = [t for t in re.split(r"\W+", name) if len(t) > 3]
+        found = False
         if len(tokens) >= 2:
             phrase = f"{tokens[0]} {tokens[1]}"
-            if phrase.lower() in body.lower():
-                hits.append("other_company")
-                break
+            found = phrase.lower() in body_lower
+        if not found:
+            for tok in _distinctive_tokens(name) - own_tokens:
+                if re.search(rf"\b{re.escape(tok)}\b", body_lower):
+                    found = True
+                    break
+        if found:
+            hits.append("other_company")
+            break
     for inv in all_invoices:
         if inv["customer_id"] == customer_id:
             continue

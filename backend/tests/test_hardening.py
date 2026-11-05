@@ -195,3 +195,42 @@ async def test_extension_phrases_always_need_attention(db, body):
     )
     assert r["processed"][0]["status"] == "needs_attention"
     assert smtp.sent == []
+
+
+# ------------------------------------------------------------ M5 other-company
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "What does Redwood owe you?",
+        "what does REDWOOD clinics owe",
+        "Is Nordlys paying on time?",
+        "Please send the statement for Thornfield.",
+    ],
+)
+async def test_single_token_other_company_needs_attention(db, body):
+    r, smtp = await run_inbox(
+        db,
+        [mail("<m5>", "arjun@t.example", "Hi", body, "1")],
+        [llm_json("balance_query")],
+    )
+    assert r["processed"][0]["status"] == "needs_attention"
+    assert smtp.sent == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "Kestrel here: what is our balance?",
+        "Kestrel Foods wants to know the amount pending, packaging and logistics costs included.",
+        "Is the peak season invoice included in the balance?",
+    ],
+)
+async def test_own_company_and_generic_words_are_not_flagged(db, body):
+    r, smtp = await run_inbox(
+        db,
+        [mail("<m5b>", "arjun@t.example", "Hi", body, "1")],
+        [llm_json("balance_query")],
+    )
+    assert r["processed"][0]["status"] == "auto_answered"
