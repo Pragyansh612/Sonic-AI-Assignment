@@ -10,14 +10,30 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = REPO_ROOT / "data"
 
+# Tokens that must never be used when ENV=production.
+INSECURE_ADMIN_TOKENS = frozenset(
+    {
+        "",
+        "dev-admin-token",
+        "test-admin-token",
+        "change-me-to-a-long-random-string",
+        "change-me",
+        "admin",
+        "secret",
+        "password",
+    }
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(REPO_ROOT / ".env"),
         env_file_encoding="utf-8",
         extra="ignore",
+        populate_by_name=True,
     )
 
+    env: str = Field(default="development", alias="ENV")
     mongodb_uri: str = Field(default="mongodb://localhost:27017", alias="MONGODB_URI")
     mongodb_db: str = Field(default="acmecorp", alias="MONGODB_DB")
     admin_api_token: str = Field(default="dev-admin-token", alias="ADMIN_API_TOKEN")
@@ -25,6 +41,20 @@ class Settings(BaseSettings):
     demo_today: str | None = Field(default=None, alias="DEMO_TODAY")
 
     data_dir: Path = Field(default=DATA_DIR)
+
+    def is_production(self) -> bool:
+        return self.env.strip().lower() in {"production", "prod"}
+
+    def assert_secure_for_environment(self) -> None:
+        """Refuse to start in production with a default/placeholder admin token."""
+        if not self.is_production():
+            return
+        token = self.admin_api_token.strip()
+        if token in INSECURE_ADMIN_TOKENS or len(token) < 16:
+            raise RuntimeError(
+                "Refusing to start: ENV=production requires a strong ADMIN_API_TOKEN "
+                "(not a default/placeholder, at least 16 characters)."
+            )
 
     smtp_host: str = Field(default="smtp.gmail.com", alias="SMTP_HOST")
     smtp_port: int = Field(default=587, alias="SMTP_PORT")

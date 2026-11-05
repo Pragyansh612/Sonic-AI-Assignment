@@ -39,6 +39,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 def create_app() -> FastAPI:
     settings = get_settings()
+    settings.assert_secure_for_environment()
     application = FastAPI(
         title="AcmeCorp Accounts API",
         version=__version__,
