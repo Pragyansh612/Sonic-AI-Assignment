@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Iterable
 
+from app.services.matching.normalize import METHOD_TOKENS, NOISE_ALWAYS
 from app.services.matching.types import CustomerInfo
+
+logger = logging.getLogger(__name__)
 
 # Legal / corporate suffixes stripped when building aliases.
 _LEGAL_SUFFIXES = frozenset(
@@ -56,12 +60,58 @@ ABBREVIATION_MAP: dict[str, frozenset[str]] = {
     "LOGISTICS": frozenset({"LOGISTIC", "LOGIX"}),
 }
 
+# Extra banking words that must never become payer aliases (beyond narration noise).
+_BANKING_STOPLIST = frozenset(
+    {
+        "CR",
+        "DR",
+        "RC",
+        "REF",
+        "REFERENCE",
+        "UTR",
+        "RRN",
+        "PAY",
+        "BANK",
+        "TRF",
+        "FROM",
+        "TO",
+        "AC",
+        "A/C",
+        "CHQ",
+        "CHEQUE",
+        "FT",
+        "FX",
+        "INB",
+        "MOB",
+        "ACH",
+        "WIRE",
+        "DEPOSIT",
+        "WITHDRAWAL",
+        "CREDIT",
+        "DEBIT",
+        "CUST",
+        "RECVD",
+        "RECEIVED",
+        "ONLINE",
+        "TXN",
+        "SETTLEMENT",
+    }
+)
+
+MIN_ACRONYM_LEN = 3
+
+FORBIDDEN_ALIAS_TOKENS: frozenset[str] = frozenset(
+    {t.upper() for t in (METHOD_TOKENS | NOISE_ALWAYS | _BANKING_STOPLIST)}
+)
+
 
 def build_aliases(customer: CustomerInfo) -> dict[str, str]:
     """
     Return alias → source ("company"|"contact") for a customer.
 
     Company aliases are stronger evidence than contact-name aliases.
+    Aliases that collide with bank noise / method tokens / banking stoplist,
+    or short acronyms (< MIN_ACRONYM_LEN letters), are dropped and logged.
     """
     aliases: dict[str, str] = {}
 
@@ -72,7 +122,7 @@ def build_aliases(customer: CustomerInfo) -> dict[str, str]:
         # Do not overwrite a company alias with a weaker contact one
         aliases.setdefault(alias, "contact")
 
-    return aliases
+    return _sanitize_aliases(customer.customer_id, aliases)
 
 
 def build_alias_index(
@@ -90,6 +140,70 @@ def build_alias_index(
     return index
 
 
+def alias_violation_reason(alias: str) -> str | None:
+    """
+    Return a short reason if `alias` is unsafe as a payer alias, else None.
+
+    Rules:
+    - any token in FORBIDDEN_ALIAS_TOKENS
+    - single letter-only token shorter than MIN_ACRONYM_LEN (short acronym)
+    """
+    tokens = _alias_tokens(alias)
+    if not tokens:
+        return "empty"
+    if (
+        len(tokens) == 1
+        and tokens[0].isalpha()
+        and len(tokens[0]) < MIN_ACRONYM_LEN
+    ):
+        return f"short_acronym<{MIN_ACRONYM_LEN}"
+    for tok in tokens:
+        if tok in FORBIDDEN_ALIAS_TOKENS:
+            return f"forbidden_token:{tok}"
+    return None
+
+
+def assert_customer_aliases_safe(
+    customers: Iterable[CustomerInfo],
+) -> None:
+    """
+    Seed / startup invariant: every retained alias is free of bank-noise tokens
+    and short acronyms. `build_aliases` already drops violators; this asserts
+    nothing forbidden slipped through.
+    """
+    for customer in customers:
+        for alias in build_aliases(customer):
+            reason = alias_violation_reason(alias)
+            assert reason is None, (
+                f"unsafe alias {alias!r} for {customer.customer_id} "
+                f"({customer.name}): {reason}"
+            )
+
+
+def _sanitize_aliases(
+    customer_id: str, aliases: dict[str, str]
+) -> dict[str, str]:
+    kept: dict[str, str] = {}
+    for alias, source in aliases.items():
+        reason = alias_violation_reason(alias)
+        if reason is not None:
+            logger.warning(
+                "Dropping unsafe customer alias customer_id=%s alias=%r "
+                "source=%s reason=%s",
+                customer_id,
+                alias,
+                source,
+                reason,
+            )
+            continue
+        kept[alias] = source
+    return kept
+
+
+def _alias_tokens(alias: str) -> list[str]:
+    return [t for t in re.split(r"[^A-Z0-9]+", alias.upper()) if t]
+
+
 def _company_aliases(name: str) -> set[str]:
     tokens = _tokenize(name)
     core = [t for t in tokens if t not in _LEGAL_SUFFIXES]
@@ -104,7 +218,7 @@ def _company_aliases(name: str) -> set[str]:
     # Two-letter acronyms (RC, BL, …) collide with bank noise / reordered CR/DR
     # tokens and create false high-scoring payer matches.
     acr = _acronym(core)
-    if len(acr) >= 3:
+    if len(acr) >= MIN_ACRONYM_LEN:
         aliases.add(acr)
 
     # Singular / plural variants of last significant token

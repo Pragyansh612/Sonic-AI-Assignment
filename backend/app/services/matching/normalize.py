@@ -12,7 +12,8 @@ from app.services.matching.types import (
 )
 
 # Transfer / noise tokens stripped from payer candidate text.
-_METHOD_TOKENS = frozenset(
+# Public names are imported by alias sanitization (must stay in sync).
+METHOD_TOKENS = frozenset(
     {
         "NEFT",
         "RTGS",
@@ -46,12 +47,12 @@ _METHOD_TOKENS = frozenset(
         "SEP",
         "DUES",
         "DUE",
-        "CLINIC",  # kept? No - CLINIC can be part of payer; don't strip generically
     }
 )
+_METHOD_TOKENS = METHOD_TOKENS
 
 # Tokens that are almost always bank noise (safe to strip globally).
-_NOISE_ALWAYS = frozenset(
+NOISE_ALWAYS = frozenset(
     {
         "NEFT",
         "RTGS",
@@ -80,6 +81,7 @@ _NOISE_ALWAYS = frozenset(
         "SETTLEMENT",
     }
 )
+_NOISE_ALWAYS = NOISE_ALWAYS
 
 _UTR_RE = re.compile(
     r"\b(?:UTR|REF(?:ERENCE)?|RRN|CHQ|CHEQUE)[-:]?\s*[A-Z0-9]{6,}\b",

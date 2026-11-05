@@ -40,9 +40,26 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    from app.repositories.customer import CustomerRepository
     from app.scheduler import start_scheduler, stop_scheduler
+    from app.services.matching.aliases import assert_customer_aliases_safe
+    from app.services.matching.types import CustomerInfo
 
-    await ensure_indexes(get_db())
+    db = get_db()
+    await ensure_indexes(db)
+    customer_docs = await CustomerRepository(db).list_all()
+    if customer_docs:
+        assert_customer_aliases_safe(
+            [
+                CustomerInfo(
+                    customer_id=c["customer_id"],
+                    name=c["name"],
+                    contact_name=c["contact_name"],
+                    currency=c["currency"],
+                )
+                for c in customer_docs
+            ]
+        )
     start_scheduler(get_settings())
     yield
     stop_scheduler()

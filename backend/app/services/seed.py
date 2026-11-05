@@ -103,6 +103,22 @@ async def seed_from_data(
     invoice_docs = [transform_invoice(inv) for inv in invoices_raw]
     invoice_count = await invoice_repo.replace_all(invoice_docs)
 
+    # Alias safety: drop+log happens inside build_aliases; assert retained set.
+    from app.services.matching.aliases import assert_customer_aliases_safe
+    from app.services.matching.types import CustomerInfo
+
+    assert_customer_aliases_safe(
+        [
+            CustomerInfo(
+                customer_id=c["customer_id"],
+                name=c["name"],
+                contact_name=c["contact_name"],
+                currency=c["currency"],
+            )
+            for c in customers_raw
+        ]
+    )
+
     runtime_counts: dict[str, int] = {}
     if clear_runtime:
         runtime_counts = await clear_runtime_collections(db)

@@ -37,6 +37,40 @@ def test_aliases_include_abbrev_and_contact() -> None:
     ra = build_aliases(redwood)
     assert any("CLINIC" in a for a in ra)
     assert any("ANIL MENON" in a or a.endswith("MENON") for a in ra)
+    assert "RC" not in ra
+
+
+def test_aliases_drop_bank_noise_and_short_acronyms(caplog) -> None:
+    from app.services.matching.aliases import (
+        FORBIDDEN_ALIAS_TOKENS,
+        MIN_ACRONYM_LEN,
+        alias_violation_reason,
+        assert_customer_aliases_safe,
+    )
+
+    # Seeded customers must satisfy the startup/seed invariant.
+    assert_customer_aliases_safe(load_customers())
+
+    for tok in ("CR", "DR", "RC", "REF", "UTR", "PAY", "BANK", "TRF", "FROM", "TO"):
+        assert tok in FORBIDDEN_ALIAS_TOKENS
+
+    noisy = CustomerInfo(
+        "CX",
+        "CR Pay Bank Transfer Ltd",
+        "Ref Utr",
+        "INR",
+    )
+    with caplog.at_level("WARNING"):
+        aliases = build_aliases(noisy)
+    # No retained alias may contain a forbidden token or be a short acronym.
+    for alias in aliases:
+        assert alias_violation_reason(alias) is None
+        for part in alias.upper().split():
+            assert part not in FORBIDDEN_ALIAS_TOKENS
+            if part.isalpha() and len(alias.split()) == 1:
+                assert len(part) >= MIN_ACRONYM_LEN
+    assert "RC" not in aliases
+    assert any("drop" in r.message.lower() or "unsafe" in r.message.lower() for r in caplog.records)
 
 
 def test_similarity_abbreviation() -> None:
