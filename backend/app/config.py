@@ -81,7 +81,7 @@ class Settings(BaseSettings):
         default="https://generativelanguage.googleapis.com/v1beta/openai/",
         alias="LLM_BASE_URL",
     )
-    llm_model: str = Field(default="gemini-2.0-flash", alias="LLM_MODEL")
+    llm_model: str = Field(default="gemini-3.6-flash", alias="LLM_MODEL")
 
     match_use_embeddings: bool = Field(
         default=False, alias="MATCH_USE_EMBEDDINGS"

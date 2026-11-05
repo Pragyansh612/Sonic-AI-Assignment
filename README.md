@@ -86,7 +86,7 @@ curl -s http://localhost:8000/api/v1/health | jq
 | `ENABLE_INBOX_POLL` | backend | IMAP poll loop | `false` |
 | `INBOX_POLL_SECONDS` | backend | Poll interval | `120` |
 | `LLM_PROVIDER` | backend | Provider label (only `openai_compatible` is implemented) | `openai_compatible` |
-| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | backend | OpenAI-compatible chat | Gemini URL + flash |
+| `LLM_API_KEY` / `LLM_BASE_URL` / `LLM_MODEL` | backend | OpenAI-compatible chat (see *Changing the LLM*) | Gemini URL + `gemini-3.6-flash` |
 | `LLM_MIN_CONFIDENCE` | backend | Below → Needs attention | `0.75` |
 | `MAX_EMAIL_BODY_CHARS` | backend | Body size cap | `12000` |
 | `ENABLE_EMBEDDINGS` | backend | Optional MiniLM; needs `pip install -r requirements-embeddings.txt` | `false` |
@@ -102,7 +102,19 @@ curl -s http://localhost:8000/api/v1/health | jq
 1. **Org mailbox** → App Password → `SMTP_*` / `IMAP_*`.
 2. **Customer mailbox** → set a seed customer’s `contact_email` to that address (Customers page).
 3. Set `EMAIL_DRY_RUN=false` only when ready to send for real.
-4. Configure `LLM_API_KEY` (+ base URL/model as needed).
+4. Configure `LLM_API_KEY` (+ base URL/model as needed). See *Changing the LLM* below.
+
+### Changing the LLM
+
+The agent talks to any OpenAI-compatible `/chat/completions` endpoint. Three variables in `.env` (restart the backend after editing):
+
+```bash
+LLM_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai/   # Gemini default
+LLM_MODEL=gemini-3.6-flash
+LLM_API_KEY=<your key>
+```
+
+Provider model names are retired regularly (the previous default, `gemini-2.0-flash`, was shut down on 1 June 2026), so check your provider's current model list if you get a 404/`model not found`. For another provider, set all three, e.g. OpenAI: `LLM_BASE_URL=https://api.openai.com/v1`, `LLM_MODEL=<a current chat model>`. The model must be able to return JSON (`response_format: json_object`). Any LLM error sends the email to Needs attention rather than failing silently.
 
 ## How to run tests
 
