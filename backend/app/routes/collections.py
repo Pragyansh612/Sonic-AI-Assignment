@@ -33,13 +33,13 @@ async def _limit_reminders() -> None:
 class DraftUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    draft: str = Field(min_length=1)
+    draft: str = Field(min_length=1, max_length=20_000)
 
 
 class SendEdited(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    draft: str | None = None
+    draft: str | None = Field(default=None, max_length=20_000)
 
 
 def _smtp(db: DbDep) -> SmtpMailer:

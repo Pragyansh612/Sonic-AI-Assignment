@@ -537,6 +537,9 @@ class NeedsAttentionService:
         return await self.repo.list_needs_attention()
 
     async def update_draft(self, conversation_id: str, draft: str) -> dict[str, Any]:
+        from app.security import reject_mongo_operators
+
+        reject_mongo_operators({"draft": draft})
         updated = await self.repo.update_conversation(
             conversation_id,
             ai_draft=draft,

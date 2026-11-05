@@ -48,6 +48,7 @@ class SmtpMailer:
             msg["References"] = " ".join(strip_crlf(r) for r in email.references)
         msg.set_content(email.body[: self.settings.max_email_body_chars])
 
+        # Never log credentials or full email bodies (bodies live in Mongo only).
         if self.settings.email_dry_run:
             if self.db is not None:
                 await self.db.email_outbox.insert_one(
@@ -63,6 +64,9 @@ class SmtpMailer:
                     }
                 )
             return message_id
+
+        if not self.settings.smtp_user or not self.settings.smtp_password:
+            raise RuntimeError("SMTP credentials are not configured")
 
         with smtplib.SMTP(self.settings.smtp_host, self.settings.smtp_port, timeout=30) as smtp:
             smtp.ehlo()
