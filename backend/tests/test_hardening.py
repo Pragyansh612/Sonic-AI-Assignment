@@ -666,3 +666,75 @@ async def test_clean_draft_has_no_rejected_fields(client, db, admin_headers):
     item = (await client.get("/api/v1/collections/needs-attention", headers=admin_headers)).json()[0]
     assert "our team will review" in item["ai_draft"]
     assert not item.get("rejected_ai_draft") and not item.get("rejected_reasons")
+
+
+# ------------------------------------------------------------ LLM 404 / 401 are explained, not swallowed
+
+
+def _llm_with_status(monkeypatch, status, body=None):
+    import httpx
+
+    from app.integrations import llm_client
+
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        return httpx.Response(status, json=body or {"error": {"message": "x"}})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(
+        llm_client.httpx, "AsyncClient",
+        lambda **kw: real(transport=httpx.MockTransport(handler), **kw),
+    )
+    get_settings.cache_clear()
+    settings = get_settings().model_copy(update={"llm_api_key": "sk-secret-123"})
+    return llm_client.OpenAICompatibleLlm(settings), calls
+
+
+@pytest.mark.parametrize(
+    "status,body,expected",
+    [
+        (404, {"error": {"message": "models/foo is not found"}}, "LLM model not found: check LLM_MODEL"),
+        (400, {"error": {"message": "The model `foo` does not exist"}}, "LLM model not found: check LLM_MODEL"),
+        (401, {"error": {"message": "bad"}}, "LLM key rejected: check LLM_API_KEY"),
+        (403, {"error": {"message": "denied"}}, "LLM key rejected: check LLM_API_KEY"),
+        (400, {"error": {"message": "API key not valid. Please pass a valid API key."}}, "LLM key rejected: check LLM_API_KEY"),
+    ],
+)
+async def test_llm_misconfiguration_gives_one_clear_line(monkeypatch, caplog, status, body, expected):
+    from app.integrations.llm_client import LlmError
+
+    llm, calls = _llm_with_status(monkeypatch, status, body)
+    with caplog.at_level("ERROR", logger="app.llm"):
+        with pytest.raises(LlmError) as exc:
+            await llm.complete_json(system="s", user="u", schema_hint={"intent": ""})
+    assert str(exc.value) == expected
+    assert len(calls) == 1  # misconfiguration is not retried
+    lines = [r.getMessage() for r in caplog.records if r.name == "app.llm"]
+    assert lines == [expected]
+    assert "sk-secret-123" not in caplog.text
+
+
+async def test_transient_llm_errors_are_still_retried(monkeypatch):
+    from app.integrations.llm_client import LlmError
+
+    llm, calls = _llm_with_status(monkeypatch, 503)
+    with pytest.raises(LlmError):
+        await llm.complete_json(system="s", user="u", schema_hint={"intent": ""})
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize("status", [404, 401])
+async def test_llm_misconfiguration_routes_email_to_needs_attention(db, monkeypatch, status):
+    llm, _ = _llm_with_status(monkeypatch, status)
+    settings = await setup_customers(db)
+    smtp, imap = FakeSmtp(), FakeImap([mail("<l1>", "arjun@t.example", "Hi", "balance?", "1")])
+    res = await InboundService(db, imap=imap, smtp=smtp, llm=llm, settings=settings).check_inbox()
+    assert res["processed"][0]["status"] == "needs_attention"
+    assert smtp.sent == []
+    conv = await db.conversations.find_one({"customer_id": "C002"})
+    assert conv["status"] == "needs_attention"
+    want = "LLM model not found: check LLM_MODEL" if status == 404 else "LLM key rejected: check LLM_API_KEY"
+    assert want in conv["needs_attention_reason"]
+    assert "sk-secret-123" not in conv["needs_attention_reason"]
