@@ -790,3 +790,24 @@ async def test_prompt_tells_model_not_to_repeat_facts(db):
     ).check_inbox()
     user = llm.calls[0]["user"]
     assert "appended automatically" in user and "do NOT" in user
+
+
+async def test_one_failed_reminder_send_does_not_abort_the_batch(db):
+    from app.services.reminder_service import ReminderService
+
+    class FailOnce(FakeSmtp):
+        n = 0
+
+        async def send(self, email):
+            FailOnce.n += 1
+            if FailOnce.n == 2:
+                raise ConnectionResetError("reset by peer")
+            return await super().send(email)
+
+    res = await ReminderService(db, FailOnce(), get_settings()).send_reminders()
+    assert res["ok"] is True
+    assert len(res["failed"]) == 1 and "reset" in res["failed"][0]["error"]
+    assert len(res["sent"]) >= 6
+    failed_id = res["failed"][0]["customer_id"]
+    again = await ReminderService(db, FakeSmtp(), get_settings()).send_reminders()
+    assert [s["customer_id"] for s in again["sent"]] == [failed_id]  # only the failed one is retried

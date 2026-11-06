@@ -63,6 +63,7 @@ class ReminderService:
 
         sent: list[dict[str, Any]] = []
         skipped: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
         cooldown = timedelta(hours=self.settings.reminder_cooldown_hours)
 
         for customer_id, invs in sorted(overdue_by_customer.items()):
@@ -113,15 +114,24 @@ class ReminderService:
                 org=org,
             )
             message_id = f"<{uuid.uuid4().hex}@acmecorp.local>"
-            await self.smtp.send(
-                OutboundEmail(
-                    to_address=customer["contact_email"],
-                    subject=subject,
-                    body=body,
-                    message_id=message_id,
-                    conversation_id=conversation_id,
+            try:
+                await self.smtp.send(
+                    OutboundEmail(
+                        to_address=customer["contact_email"],
+                        subject=subject,
+                        body=body,
+                        message_id=message_id,
+                        conversation_id=conversation_id,
+                    )
                 )
-            )
+            except Exception as exc:  # noqa: BLE001 — keep going with other customers
+                failed.append(
+                    {
+                        "customer_id": customer_id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    }
+                )
+                continue
             conv_doc = {
                 "conversation_id": conversation_id,
                 "customer_id": customer_id,
@@ -165,7 +175,7 @@ class ReminderService:
                 }
             )
 
-        return {"ok": True, "sent": sent, "skipped": skipped}
+        return {"ok": True, "sent": sent, "skipped": skipped, "failed": failed}
 
 
 def datetime_from_iso(value: str):
