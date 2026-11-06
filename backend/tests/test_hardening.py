@@ -770,3 +770,12 @@ async def test_transient_llm_errors_get_three_attempts(monkeypatch):
     with pytest.raises(LlmError):
         await llm.complete_json(system="s", user="u", schema_hint={"intent": ""})
     assert len(calls) == 3
+
+
+async def test_needs_attention_reason_shows_routing_facts(db):
+    r, _ = await run_inbox(
+        db, [mail("<rf>", "arjun@t.example", "Hi", "hello there", "1")],
+        [llm_json("smalltalk", conf=0.9)],
+    )
+    reason = r["processed"][0]["reason"]
+    assert "intent=other" in reason and "confidence=0.9" in reason and "needs_human=False" in reason

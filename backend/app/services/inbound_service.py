@@ -368,6 +368,7 @@ class InboundService:
                 reason = f"mixed_intent; {reason}"
             if confidence < self.settings.llm_min_confidence:
                 reason = f"low_confidence({confidence}); {reason}"
+            reason = f"{reason} [intent={intent} confidence={confidence} needs_human={needs_human}]"
             await self._flag_needs_attention(
                 conversation,
                 reason=reason,
