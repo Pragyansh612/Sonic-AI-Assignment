@@ -230,6 +230,20 @@ curl -s -X POST $API/collections/needs-attention/$CONV/send \
 curl -s -X POST $API/collections/needs-attention/$CONV/dismiss -H "$H" | jq
 ```
 
+## Troubleshooting
+
+| Symptom | Cause / fix |
+|---|---|
+| **401 `Invalid or missing admin token`** on Collections/Reconciliation (or any API call) | Frontend `ADMIN_TOKEN` (`frontend/.env.local`) differs from backend `ADMIN_API_TOKEN` (`.env`). Make them identical and restart **both** servers; the Next.js console prints `[proxy] Backend rejected ADMIN_TOKEN (401)` once. For curl, `export ADMIN_API_TOKEN=...` first. |
+| **`Invalid HTTP request received`** from curl/uvicorn, or token "never matches" | The value picked up a hidden `\r` from a Windows (CRLF) `.env`, e.g. via `source .env` or `export $(cat .env)`. Fix with `sed -i 's/\r$//' .env frontend/.env.local` (the shipped examples are LF). |
+| **Check inbox returns an IMAP login error** (`AUTHENTICATIONFAILED`, `IMAP4 ... Invalid credentials`) | In Gmail: *Settings → Forwarding and POP/IMAP → Enable IMAP*. Use the full address as `IMAP_USER`. Also check `IMAP_HOST=imap.gmail.com`, `IMAP_PORT=993`. |
+| **Gmail rejects the password** (SMTP 535 / IMAP login failed) with the correct account password | Gmail needs an **App Password**, which exists only when **2-Step Verification** is on (*Google Account → Security → 2-Step Verification → App passwords*). Paste the 16-character app password (no spaces) into `SMTP_PASSWORD` and `IMAP_PASSWORD`. |
+| Emails appear in the *Outbox* (`email_outbox` collection) but never arrive | `EMAIL_DRY_RUN=true` (the default). Set `EMAIL_DRY_RUN=false` once SMTP credentials are in place. |
+| Inbound mail lands in **Needs attention** with `LLM error: LLM model not found: check LLM_MODEL` | The model name was retired or misspelled (e.g. `gemini-2.0-flash` was shut down on 1 June 2026). Set `LLM_MODEL` to a current model from your provider's list; see *Changing the LLM*. The backend log shows the same one-line message. |
+| Needs attention with `LLM key rejected: check LLM_API_KEY` | The key is wrong, revoked, or for another provider/`LLM_BASE_URL`. |
+| New mail is not picked up right away | Gmail IMAP can lag; click *Check inbox now* again. Messages are fetched with `BODY.PEEK`, so a failed run leaves them unread and they are retried. |
+| `docker compose up` fails on port 27017 | Another Mongo is running. Stop it, or change the port mapping and `MONGODB_URI`. |
+
 ## Design decisions & assumptions
 
 1. **Money:** major units only at the JSON seed boundary; runtime is minor ints + `Decimal` math.
