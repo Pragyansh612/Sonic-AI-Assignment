@@ -779,3 +779,14 @@ async def test_needs_attention_reason_shows_routing_facts(db):
     )
     reason = r["processed"][0]["reason"]
     assert "intent=other" in reason and "confidence=0.9" in reason and "needs_human=False" in reason
+
+
+async def test_prompt_tells_model_not_to_repeat_facts(db):
+    settings = await setup_customers(db)
+    llm = FakeLlm([llm_json("balance_query")])
+    await InboundService(
+        db, imap=FakeImap([mail("<pp>", "arjun@t.example", "Hi", "balance?", "1")]),
+        smtp=FakeSmtp(), llm=llm, settings=settings,
+    ).check_inbox()
+    user = llm.calls[0]["user"]
+    assert "appended automatically" in user and "do NOT" in user

@@ -555,7 +555,8 @@ class InboundService:
             "legal = legal threat; other_company = asks about another company; other = anything else.)\n"
             "If the email mixes a routine question with an extension, dispute or legal point, set needs_human=true.\n"
             "JSON keys: intent, confidence (0-1), needs_human, reason, "
-            "referenced_invoices, prose_reply (short polite prose only, no tables)."
+            "referenced_invoices, prose_reply (1-2 polite sentences only. Invoice lists, amounts, due dates "
+            "and bank details are appended automatically by the system, so do NOT write them)."
         )
         return await self.llm.complete_json(
             system=system, user=user, schema_hint=LLM_SCHEMA
