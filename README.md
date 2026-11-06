@@ -154,19 +154,48 @@ curl -s -X POST http://localhost:8000/api/v1/admin/reset \
 
 ### Reconciliation (Part C)
 
+Run from the repo root, with `ADMIN_API_TOKEN` exported (see above). Each suggestion can be approved once; call `admin/reset` to start over.
+
 ```bash
-curl -s -X POST http://localhost:8000/api/v1/reconciliation/upload \
-  -H "X-Admin-Token: $ADMIN_API_TOKEN" \
-  -F "file=@data/bank_statement_sample.csv"
+API=http://localhost:8000/api/v1
+H="X-Admin-Token: $ADMIN_API_TOKEN"
 
-curl -s http://localhost:8000/api/v1/reconciliation/statements/{id} \
-  -H "X-Admin-Token: $ADMIN_API_TOKEN"
+# 1) Upload the sample statement; keep the statement id
+STMT=$(curl -s -X POST $API/reconciliation/upload -H "$H" \
+  -F "file=@data/bank_statement_sample.csv" | jq -r .statement_id)
 
-curl -s -X POST …/suggestions/{id}/approve -H "…" -d '{}'
-curl -s -X POST …/approve -d '{"tds_mode":"leave_open"}'
-curl -s -X POST …/approve -d '{"tds_mode":"close_tds"}'   # INR + shortfall == 10% subtotal
-curl -s -X POST …/reject -d '{}'
-curl -s -X POST …/choose -d '{"invoice_numbers":["INV-1002"]}'
+# 2) Review: row, suggested invoice(s), confidence, reason
+curl -s $API/reconciliation/statements/$STMT -H "$H" \
+  | jq -r '.suggestions[] | "\(.row_number)\t\(.suggestion_type)\t\(.invoice_numbers|join(","))\t\(.confidence)\t\(.suggestion_id)\t\(.reason)"'
+
+# helper: suggestion id for a suggested invoice list, e.g. sug INV-1004
+sug() { curl -s $API/reconciliation/statements/$STMT -H "$H" \
+  | jq -r --arg n "$1" '.suggestions[] | select((.invoice_numbers|join(","))==$n) | .suggestion_id'; }
+
+# 3a) Approve an exact match (INV-1004 -> paid)
+curl -s -X POST $API/reconciliation/suggestions/$(sug INV-1004)/approve \
+  -H "$H" -H "Content-Type: application/json" -d '{}' | jq
+
+# 3b) Partial payment: first call answers 422 tds_choice_required, then choose
+curl -s -X POST $API/reconciliation/suggestions/$(sug INV-1013)/approve \
+  -H "$H" -H "Content-Type: application/json" -d '{}' | jq
+curl -s -X POST $API/reconciliation/suggestions/$(sug INV-1013)/approve \
+  -H "$H" -H "Content-Type: application/json" -d '{"tds_mode":"leave_open"}' | jq
+
+# 3c) Shortfall equal to 10% of subtotal (INR only): close the invoice with TDS
+curl -s -X POST $API/reconciliation/suggestions/$(sug INV-1007)/approve \
+  -H "$H" -H "Content-Type: application/json" -d '{"tds_mode":"close_tds"}' | jq
+
+# 3d) One payment, several invoices (split on approve)
+curl -s -X POST $API/reconciliation/suggestions/$(sug INV-1010,INV-1011,INV-1012)/approve \
+  -H "$H" -H "Content-Type: application/json" -d '{}' | jq
+
+# 4) Reject a suggestion, or manually choose a different invoice (then approve it)
+curl -s -X POST $API/reconciliation/suggestions/$(sug INV-1016)/reject -H "$H" | jq
+SUG_NONE=$(curl -s $API/reconciliation/statements/$STMT -H "$H" \
+  | jq -r '[.suggestions[] | select(.status=="pending" and .suggestion_type=="none")][0].suggestion_id')
+curl -s -X POST $API/reconciliation/suggestions/$SUG_NONE/choose \
+  -H "$H" -H "Content-Type: application/json" -d '{"invoice_numbers":["INV-1002"]}' | jq
 ```
 
 Cross-upload fingerprint already applied → **409**.
@@ -174,15 +203,31 @@ Cross-upload fingerprint already applied → **409**.
 ### Collections (Part B)
 
 ```bash
-curl -s -X POST http://localhost:8000/api/v1/collections/reminders/send \
-  -H "X-Admin-Token: $ADMIN_API_TOKEN"
-curl -s -X POST http://localhost:8000/api/v1/collections/inbox/check \
-  -H "X-Admin-Token: $ADMIN_API_TOKEN"
-curl -s http://localhost:8000/api/v1/collections/conversations -H "X-Admin-Token: $ADMIN_API_TOKEN"
-curl -s http://localhost:8000/api/v1/collections/needs-attention -H "X-Admin-Token: $ADMIN_API_TOKEN"
-curl -s -X PATCH …/needs-attention/{id} -d '{"draft":"…"}'
-curl -s -X POST …/needs-attention/{id}/send -d '{}'
-curl -s -X POST …/needs-attention/{id}/dismiss
+API=http://localhost:8000/api/v1
+H="X-Admin-Token: $ADMIN_API_TOKEN"
+
+curl -s -X POST $API/collections/reminders/send -H "$H" | jq
+curl -s -X POST $API/collections/inbox/check -H "$H" | jq
+curl -s $API/collections/conversations -H "$H" | jq 'length'
+
+# Needs attention: list, pick the first item, edit its draft, send or dismiss it.
+# (If the list is empty, reply to a reminder from the customer inbox with
+#  "Can we get two more weeks to pay?" and run inbox/check again.)
+curl -s $API/collections/needs-attention -H "$H" | jq '.[] | {conversation_id, needs_attention_reason}'
+CONV=$(curl -s $API/collections/needs-attention -H "$H" | jq -r '.[0].conversation_id')
+
+curl -s -X PATCH $API/collections/needs-attention/$CONV \
+  -H "$H" -H "Content-Type: application/json" \
+  -d '{"draft":"Dear customer, thank you for your message. Our Accounts Team will review it and reply shortly."}' | jq
+
+# Send: 200 on a clean draft. If the draft fails validation you get 409
+# "validation_warnings"; add "acknowledge_warnings": true to override knowingly.
+curl -s -X POST $API/collections/needs-attention/$CONV/send \
+  -H "$H" -H "Content-Type: application/json" -d '{}' | jq
+curl -s -X POST $API/collections/needs-attention/$CONV/send \
+  -H "$H" -H "Content-Type: application/json" -d '{"acknowledge_warnings":true}' | jq
+
+curl -s -X POST $API/collections/needs-attention/$CONV/dismiss -H "$H" | jq
 ```
 
 ## Design decisions & assumptions
