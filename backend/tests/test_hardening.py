@@ -716,15 +716,6 @@ async def test_llm_misconfiguration_gives_one_clear_line(monkeypatch, caplog, st
     assert "sk-secret-123" not in caplog.text
 
 
-async def test_transient_llm_errors_are_still_retried(monkeypatch):
-    from app.integrations.llm_client import LlmError
-
-    llm, calls = _llm_with_status(monkeypatch, 503)
-    with pytest.raises(LlmError):
-        await llm.complete_json(system="s", user="u", schema_hint={"intent": ""})
-    assert len(calls) == 2
-
-
 @pytest.mark.parametrize("status", [404, 401])
 async def test_llm_misconfiguration_routes_email_to_needs_attention(db, monkeypatch, status):
     llm, _ = _llm_with_status(monkeypatch, status)
@@ -738,3 +729,44 @@ async def test_llm_misconfiguration_routes_email_to_needs_attention(db, monkeypa
     want = "LLM model not found: check LLM_MODEL" if status == 404 else "LLM key rejected: check LLM_API_KEY"
     assert want in conv["needs_attention_reason"]
     assert "sk-secret-123" not in conv["needs_attention_reason"]
+
+
+# ------------------------------------------------------------ live-LLM findings
+
+
+async def test_prompt_enumerates_every_allowed_intent(db):
+    from app.services.inbound_service import ALL_INTENTS, AUTO_INTENTS
+
+    settings = await setup_customers(db)
+    llm = FakeLlm([llm_json("balance_query")])
+    await InboundService(
+        db, imap=FakeImap([mail("<i1>", "arjun@t.example", "Hi", "balance?", "1")]),
+        smtp=FakeSmtp(), llm=llm, settings=settings,
+    ).check_inbox()
+    prompt = llm.calls[0]["user"] + llm.calls[0]["system"]
+    for intent in ALL_INTENTS:
+        assert intent in prompt, intent
+    assert AUTO_INTENTS <= set(ALL_INTENTS)
+
+
+async def test_invented_intent_name_is_treated_as_other(db):
+    r, smtp = await run_inbox(
+        db, [mail("<i2>", "arjun@t.example", "Hi", "balance?", "1")],
+        [llm_json("balance_and_payment_info_request")],
+    )
+    assert r["processed"][0]["status"] == "needs_attention" and smtp.sent == []
+
+
+async def test_transient_llm_errors_get_three_attempts(monkeypatch):
+    import asyncio
+
+    from app.integrations.llm_client import LlmError
+
+    async def no_sleep(_):  # keep the test fast
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", no_sleep)
+    llm, calls = _llm_with_status(monkeypatch, 503)
+    with pytest.raises(LlmError):
+        await llm.complete_json(system="s", user="u", schema_hint={"intent": ""})
+    assert len(calls) == 3

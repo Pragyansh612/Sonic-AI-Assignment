@@ -606,7 +606,8 @@ async def test_quoted_reminder_history_does_not_trigger_policy(db) -> None:
     assert smtp.sent
     # LLM must only see cleaned body
     assert "Brightline" not in llm.calls[0]["user"]
-    assert "dispute" not in llm.calls[0]["user"].lower()
+    email_part = llm.calls[0]["user"].split("<<<EMAIL>>>")[1].split("<<<END_EMAIL>>>")[0]
+    assert "dispute" not in email_part.lower()  # (the instructions list intents; the mail must not)
     assert "We will pay by Friday." in llm.calls[0]["user"]
 
 

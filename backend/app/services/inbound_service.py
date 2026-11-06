@@ -29,6 +29,19 @@ from app.services.safety_keywords import is_auto_reply_or_bounce, scan_body_for_
 
 _TOKEN_RE = re.compile(r"\[AC-([A-Za-z0-9-]+)\]")
 
+ALL_INTENTS = (
+    "balance_query",
+    "payment_details",
+    "claims_paid",
+    "promises_payment",
+    "extension_request",
+    "dispute",
+    "legal",
+    "other_company",
+    "out_of_office",
+    "other",
+)
+
 AUTO_INTENTS = frozenset(
     {"balance_query", "payment_details", "claims_paid", "promises_payment"}
 )
@@ -262,6 +275,8 @@ class InboundService:
             llm_error = str(exc)
 
         intent = str((llm_result or {}).get("intent") or "other").strip().lower()
+        if intent not in ALL_INTENTS:
+            intent = "other"  # invented label: never auto-answer
         confidence = float((llm_result or {}).get("confidence") or 0)
         needs_human = bool((llm_result or {}).get("needs_human"))
         prose = str((llm_result or {}).get("prose_reply") or "").strip()
@@ -531,6 +546,13 @@ class InboundService:
             f"Subject: {msg.subject}\n"
             f"{msg.body_text}\n"
             "<<<END_EMAIL>>>\n"
+            "intent MUST be exactly one of: " + ", ".join(ALL_INTENTS) + ". "
+            "(balance_query = asks what they owe or about their invoices; "
+            "payment_details = asks how or where to pay / bank details; "
+            "claims_paid = says they already paid; promises_payment = says they will pay on a date; "
+            "extension_request = wants more time or instalments; dispute = disputes an invoice; "
+            "legal = legal threat; other_company = asks about another company; other = anything else.)\n"
+            "If the email mixes a routine question with an extension, dispute or legal point, set needs_human=true.\n"
             "JSON keys: intent, confidence (0-1), needs_human, reason, "
             "referenced_invoices, prose_reply (short polite prose only, no tables)."
         )

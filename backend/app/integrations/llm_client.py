@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -131,8 +132,10 @@ class OpenAICompatibleLlm:
         }
         url = self.settings.llm_base_url.rstrip("/") + "/chat/completions"
         last_err: Exception | None = None
-        # One network/parse attempt + one retry
-        for _ in range(2):
+        # Up to 3 attempts; short backoff between them for transient 429/5xx/parse errors
+        for attempt in range(3):
+            if attempt:
+                await asyncio.sleep(1.0 * attempt)
             try:
                 async with httpx.AsyncClient(timeout=45.0) as client:
                     resp = await client.post(url, headers=headers, json=payload)
